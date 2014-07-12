@@ -17,15 +17,13 @@ open Async.Std
 open Cryptokit
 
 let hex ~s = transform_string (Hexa.decode ()) s
+
 let tohex ~s = transform_string (Hexa.encode ()) s
 
-(** derive 32-byte key from string of arbitrary size *)
 let deriveSha256 ~s = hash_string (Hash.sha256 ()) s
 
-(** derive 16-byte key from string of arbitrary size *)
 let deriveMd5 ~s = hash_string (Hash.md5 ()) s
 
-(** similar to OpenSSL's EVP_BytesToKey() *)
 let evpBytesToKey ~pwd ~key_len ~iv_len =
   let rec derive strli i lilen =
     if (16 * lilen) >= key_len + iv_len then begin
@@ -44,16 +42,8 @@ let evpBytesToKey ~pwd ~key_len ~iv_len =
     end
   in derive [] 0 0
 
+let prng () = Random.pseudo_rng (Random.string Random.secure_rng 20)
 
-(** AES_cipher
-    key:    key, of length 16, 24 or 32
-    iv:     initializatoin vector, of length 16 bytes,
-            derived from evpBytesToKey
-            TODO: use pesudo-random generated IV
-    plain:  plain-text, of arbitrary length
-    cipher: cipher-text, of arbitrary length
-
-    Note: The boxes process data by block of 128 bits (16 bytes) *)
 
 module AES_Cipher = struct
 
@@ -63,7 +53,29 @@ module AES_Cipher = struct
     let encBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Encrypt in
     plain >>| fun ptext -> transform_string encBox ptext
 
-  let decrptor ~key ~iv ~cipher =
+  let decryptor ~key ~iv ~cipher =
     let decBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt in
     cipher >>| fun ctext -> transform_string decBox ctext
+end
+
+
+
+module AES_Cipher_RandomIV = struct
+
+  type t
+
+  let encryptor_r ~key ~plain ~prng =
+    let riv = Random.string prng 16 in
+    let encbox = 
+      return (Cipher.aes ~pad:Padding.length ~iv:riv key Cipher.Encrypt) in
+    Deferred.both encbox plain >>|
+    fun (encrypt, plaintext) -> (riv ^ (transform_string encrypt plaintext))
+
+  let decrptor_r ~key ~cipher =
+    let decbox = (cipher >>| (fun ctext -> String.slice ctext 0 16)) >>|
+    (fun iv -> Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt) in
+    let ctext = (cipher >>| 
+      fun ctext -> String.slice ctext 16 (String.length ctext)) in
+    Deferred.both decbox ctext >>|
+    (fun (decrypt, ciphertext) -> transform_string decrypt ciphertext)
 end

@@ -9,3 +9,5 @@
 *.cmxa
 _build
 *.json
+.merlin
+*.native

@@ -17,22 +17,40 @@ open Async.Std
 open Cryptokit
 
 
-(** auxiliary function, decode hex *)
-val hex : s:string -> string = <fun> 
+(** auxiliary function, decode from hex *)
+val hex : s:string -> string
 
 (** auxiliary function, encode to hex *)
-val tohex : s:string -> string = <fun>
+val tohex : s:string -> string
 
 (** derive 32-byte key from string of arbitrary size *)
-val deriveSha256 : s:string -> string = <fun> 
+val deriveSha256 : s:string -> string
 
 (** derive 16-byte key from string of arbitrary size *)
-val deriveMd5 : s:string -> string = <fun>
+val deriveMd5 : s:string -> string
 
-(** similar to OpenSSL's EVP_BytesToKey() *)
-val evpBytesToKey : pwd:string -> key_len:int -> iv_len:int -> string * string = <fun>
+(** implementation of OpenSSL's EVP_BytesToKey() *)
+val evpBytesToKey : pwd:string -> key_len:int -> iv_len:int -> string * string
 
-(** AES cipher module *)
+(** a pseudo-random number generator using seed provided by
+    a high-quality random number generator.
+    Note: this implementation is suggested in Xavier Leroy's cryptokit.
+*)
+
+let prng () = Random.pseudo_rng (Random.string Random.secure_rng 20)
+
+
+(** AES cipher, support AES-128-
+    key:    key, of length 16, 24 or 32
+    iv:     initializatoin vector, of length 16 bytes,
+            derived from evpBytesToKey
+    plain:  plain-text, of arbitrary length
+    cipher: cipher-text, of arbitrary length
+
+    Note: 1. The boxes process data by block of 128 bits (16 bytes)
+
+          2. No need to make encBox or decBox deferred since they
+             will by currying arguments *)
 module AES_Cipher : sig
   type t
     
@@ -40,3 +58,14 @@ module AES_Cipher : sig
     
   val decrptor : key:string -> iv:string -> cipher:string Deferred.t -> string Deferred.t
 end
+
+(** Same AES cipher but with random generated IV every encryption *)
+module AES_Cipher_RandomIV :
+  sig
+    type t
+    val encryptor_r : key:string -> plain:string Deferred.t -> prng:Random.rng -> string Deferred.t
+    val decrptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
+  end
+
+
+(** TODO: add more encryption methods, like libsodium *)
