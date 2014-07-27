@@ -15,6 +15,7 @@
 open Core.Std
 open Yojson.Basic.Util
 
+
 type t = {
   server_addr: string;
   server_port: int;
@@ -36,4 +37,4 @@ let read_config c =
     timeout = json |> member "timeout" |> to_int;
     meth = json |> member "method" |> to_string;
     local_addr = json |> member  "local_address" |> to_string;
-  }  
+  }
