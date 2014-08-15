@@ -1,6 +1,11 @@
 open Core.Std
 open Async.Std
 
+(*
+socks proxy, 
+tcp server on the client side
+*)
+
 module Fd = Unix.Fd
 module Inet_addr = Unix.Inet_addr
 module Socket = Unix.Socket
@@ -10,17 +15,20 @@ let message s = Writer.write stdout_writer s
 
 let finished () = shutdown 0
 
-let port = 61111
+let listening_port = 61111
 
+
+(* write back directly *)
 let server =
-  Tcp.Server.create (Tcp.on_port port)
+  Core.Std.eprintf "Server starts listening\n%!";
+  Tcp.Server.create (Tcp.on_port listening_port)
     (fun _ reader writer ->
       Deferred.create (fun finished ->
         let rec loop () =
           upon (Reader.read_line reader) (function
           | `Ok query ->
             message (sprintf "Server got query: %s\n" query);
-            Writer.write writer (sprintf "Response to %s\n" query);
+            Writer.write writer query;
             loop ()
           | `Eof ->
             Ivar.fill finished ();
@@ -29,29 +37,5 @@ let server =
         loop ()))
 ;;
 
-let () =
-  Core.Std.eprintf "TOP\n%!";
-;;
-
-let () =
-  let queries = ["Hello"; "Goodbye"] in
-  upon server (fun _ ->
-    Core.Std.eprintf "IN SERVER\n%!";
-    upon (Tcp.connect (Tcp.to_host_and_port "localhost" port)) (fun (_, reader, writer) ->
-      let rec loop queries =
-        match queries with
-        | [] -> upon (Writer.close writer) (fun _ -> finished ())
-        | query :: queries ->
-            Writer.write writer query;
-            Writer.write_char writer '\n';
-            upon (Reader.read_line reader) (function
-              | `Eof ->
-                  message "reader got unexpected Eof"
-              | `Ok response ->
-                  message (sprintf "Client got response: %s\n" response);
-                  loop queries)
-      in
-      loop queries))
-;;
 
 let () = never_returns (Scheduler.go ())
