@@ -30,14 +30,14 @@ val deriveSha256 : s:string -> string
 val deriveMd5 : s:string -> string
 
 (** implementation of OpenSSL's EVP_BytesToKey() *)
-val evpBytesToKey : pwd:string -> key_len:int -> iv_len:int -> string * string
+val evpBytesToKey : pwd:string -> key_len:int -> iv_len:int -> (string * string)
+
+val prng : unit -> Random.rng
 
 (** a pseudo-random number generator using seed provided by
     a high-quality random number generator.
     Note: this implementation is suggested in Xavier Leroy's cryptokit.
 *)
-
-let prng () = Random.pseudo_rng (Random.string Random.secure_rng 20)
 
 
 (** AES cipher, support AES-128-
@@ -54,9 +54,9 @@ let prng () = Random.pseudo_rng (Random.string Random.secure_rng 20)
 module AES_Cipher : sig
   type t
     
-  val encryptor : key:string -> iv:string -> plain:string Deferred.t -> string Deferred.t
+  val encryptor : key:string -> iv:string -> plain:string -> string Deferred.t
     
-  val decrptor : key:string -> iv:string -> cipher:string Deferred.t -> string Deferred.t
+  val decryptor : key:string -> iv:string -> cipher:string -> string Deferred.t
 end
 
 (** Same AES cipher but with random generated IV every encryption *)
@@ -64,7 +64,7 @@ module AES_Cipher_RandomIV :
   sig
     type t
     val encryptor_r : key:string -> plain:string Deferred.t -> prng:Random.rng -> string Deferred.t
-    val decrptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
+    val decryptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
   end
 
 

@@ -51,11 +51,11 @@ module AES_Cipher = struct
 
   let encryptor ~key ~iv ~plain = 
     let encBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Encrypt in
-    plain >>| fun ptext -> transform_string encBox ptext
+    return (transform_string encBox plain)
 
   let decryptor ~key ~iv ~cipher =
     let decBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt in
-    cipher >>| fun ctext -> transform_string decBox ctext
+    return (transform_string decBox cipher)
 end
 
 
@@ -71,7 +71,7 @@ module AES_Cipher_RandomIV = struct
     Deferred.both encbox plain >>|
     fun (encrypt, plaintext) -> (riv ^ (transform_string encrypt plaintext))
 
-  let decrptor_r ~key ~cipher =
+  let decryptor_r ~key ~cipher =
     let decbox = (cipher >>| (fun ctext -> String.slice ctext 0 16)) >>|
     (fun iv -> Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt) in
     let ctext = (cipher >>| 

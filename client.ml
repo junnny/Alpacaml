@@ -25,37 +25,20 @@ let listening_port = 61115
 let remote_host = "127.0.0.1"
 let remote_port = 61111 
 
-
-
-(*
-# local:
-# stage 0 init
-# stage 1 hello received, hello sent
-# stage 2 UDP assoc
-# stage 3 DNS
-# stage 4 addr received, reply sent
-# stage 5 remote connected
-
-# remote:
-# stage 0 init
-# stage 3 DNS
-# stage 4 addr received, reply sent
-# stage 5 remote connected
-*)
-
 exception Error of string
 
 type args = {
-  addr : Socket.Address.Inet.t;
   r : Reader.t;
   w : Writer.t;
-}
+};;
+
+
 
 type init_req = {
   ver : int;
   nmethods : int;
   methods : int list;
-}
+};;
 
 type detail_req = {
   ver : int;
@@ -64,7 +47,7 @@ type detail_req = {
   atyp : int;
   dst_addr: string;
   dst_port: int;
-}
+};;
 
 
 (*
@@ -99,8 +82,11 @@ The server selects from one of the methods given in METHODS, and
 
 *)
 
+let password = "nano15532"
 
-
+let encryptor, decryptor =
+  let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
+  (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
 
 (********************** SHARED BY STAGES *********************)
 (** not fully deferred *)
@@ -132,8 +118,26 @@ let get_bin req pos =
   if (pos < 0) || (pos >= req_len) then assert false
   else unpack_unsigned_8 ~buf:req ~pos
 
+(********************** STAGE III *********************)
+
+let remote_host = "localhost"
+
+let handle_stage_III buf n _ remote_args =
+  encryptor ~plain:(String.slice buf 3 n) >>=
+  (fun enctext ->
+     Writer.write remote_args.w enctext; return ())
 
 
+
+let stage_III buf n local_args =
+  Tcp.with_connection (Tcp.to_host_and_port remote_host remote_port)
+  (fun _ r w ->
+    let remote_args = 
+    {
+      r = r;
+      w = w;
+    } in handle_stage_III buf n local_args remote_args
+  )
 
 
 
@@ -154,6 +158,7 @@ let parse_dst_addr atyp buf =
   | () when atyp = 3 ->
       begin 
         let addr_length = get_bin buf 4 in
+        message (Printf.sprintf "%d\n\n" addr_length);
         let addr_buf = Bigbuffer.create addr_length in
         let rec build_addr s e =
           if s = e then Bigbuffer.contents addr_buf else
@@ -167,7 +172,7 @@ let parse_dst_addr atyp buf =
 let parse_dst_port req_len req =
   unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
 
-let parse_stage_II req req_len args =
+let parse_stage_II req req_len =
   Deferred.create (function r ->
     let ver = get_bin req 0
     and cmd = get_bin req 1
@@ -175,8 +180,6 @@ let parse_stage_II req req_len args =
     and atyp = get_bin req 3 in
     let dst_addr = parse_dst_addr atyp req in
     let dst_port = parse_dst_port req_len req in
-    let shp = Socket.Address.Inet.to_host_and_port args.addr in
-    message (Printf.sprintf "Socket host : %s port : %d\n" (Host_and_port.host shp) (Host_and_port.port shp));
     message (Printf.sprintf "VER: %d, CMD: %d, ATYP: %d\n" ver cmd atyp);
     message (Printf.sprintf "ADDR:PORT -> %s : %d\n" dst_addr dst_port);
     Ivar.fill r
@@ -190,29 +193,19 @@ let parse_stage_II req req_len args =
     }
   )
 
-
-let getsockname sock_addr =
-    let sock_h_p = Socket.Address.Inet.to_host_and_port sock_addr in
-    ((Host_and_port.host sock_h_p), (Host_and_port.port sock_h_p))
-
-let handle_req_stage_II buf n req args =
+let handle_req_stage_II buf n req local_args =
   match () with
-  | () when args.cmd = 1 -> begin
-      message (Printf.sprintf "Connect %s: %d\n" req.dst_addr req.dst_port);
-      return (Writer.write args.w "\x05\x00\x00\x01\x00\x00\x00\x00\x10\x10") >>=
-      
+  | () when req.cmd = 1 -> begin
+      message (Printf.sprintf "Local connecting: [ %s : %d ]\n" req.dst_addr req.dst_port);
+      return (Writer.write local_args.w "\x05\x00\x00\x01\x00\x00\x00\x00\x10\x10") >>=
+      (fun () -> stage_III buf n local_args) end
+  | _ -> return () (* not supported yet *)
 
-    )
-
-
-  | _ -> return ()
-
-
-let stage_II buf args =
-  (Reader.read args.r buf) >>= (function
-    | `Eof -> raise (Error "Unexpected EOF\n")
-    | `Ok n -> parse_stage_II buf n args >>= 
-                (fun req -> handle_req_stage_II buf n req args)
+let stage_II buf local_args =
+  (Reader.read local_args.r buf) >>= (function
+    | `Eof -> message "shit"; return () (*raise (Error "Unexpected EOF\n")*)
+    | `Ok n -> parse_stage_II buf n >>= 
+                (fun req -> handle_req_stage_II buf n req local_args)
   ) 
 
 
@@ -230,7 +223,7 @@ let parse_stage_I req req_len =
   }
 
 
-let stage_I buf n args = 
+let stage_I buf n local_args = 
   parse_stage_I buf n >>= (fun init_req ->
     return (
       init_req.ver = 5 && 
@@ -239,8 +232,8 @@ let stage_I buf n args =
     ) >>= 
     (fun validity ->
       if validity then 
-        (return (Writer.write args.w "\x05\x01"))
-          >>= (fun () -> stage_II buf args)
+        (return (Writer.write local_args.w "\x05\x00"))
+          >>= (fun () -> stage_II buf local_args)
       else raise (Error "*** Invalid request at STAGE: INIT ***\n")
     ))
 
@@ -248,21 +241,20 @@ let stage_I buf n args =
 (********************** MAIN PART *********************)
 
 
-let start_listen addr r w =
+let start_listen _ r w =
     let buf = String.create 4096 in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
       | `Ok n -> begin
-          let args = 
+          let local_args = 
           {
-            addr = addr;
             r = r;
             w = w;
-          } in stage_I buf n args end)
+          } in stage_I buf n local_args end)
 
 
 let server () =
-  message "client side server starts\n";
+  message "local side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore start_listen
 
