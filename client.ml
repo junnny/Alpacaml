@@ -1,32 +1,35 @@
+(* Copyright (C) 2014 marklrh
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>. *)
+
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
-
-(*
-
-socks proxy, 
-tcp server on the client side
-
-*)
 
 module Fd = Unix.Fd
 module Inet_addr = Unix.Inet_addr
 module Socket = Unix.Socket
 
-let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer= Lazy.force Writer.stderr
-let message s = Writer.write stdout_writer s
-let warn s = Writer.write stderr_writer s
-
-let finished () = shutdown 0
-
+(** hardcoded info *)
 let listening_port = 61115
 
 let remote_host = "127.0.0.1"
 let remote_port = 61111
 
+(** a general exception *)
 exception Error of string
 
+(** type declaration *)
 type args = {
   r : Reader.t;
   w : Writer.t;
@@ -47,15 +50,9 @@ type detail_req = {
   dst_port: int;
 };;
 
-let password = "nano15532"
+(** Some debugging functions *)
 
-let encryptor, decryptor =
-  let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
-  (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
-
-(********************** SHARED BY STAGES *********************)
 (** not fully deferred *)
-(** string -> int -> () *)
 let view_request buf n = 
   let poses = List.range 0 n in
   let print_binary p = 
@@ -76,21 +73,35 @@ let read_and_review buf args =
          Ivar.fill finished ();)
   )
 
-(** pos should be in range *)
-(** string -> int -> int Deferred.t *)
+(** turn binary bit from string to int, helper function
+    pos should be in range
+    string -> int -> int Deferred.t *)
 let get_bin req pos =
   let req_len = String.length req in
   if (pos < 0) || (pos >= req_len) then assert false
   else unpack_unsigned_8 ~buf:req ~pos
 
+let stdout_writer = Lazy.force Writer.stdout
+let stderr_writer= Lazy.force Writer.stderr
+let message s = Writer.write stdout_writer s
+let warn s = Writer.write stderr_writer s
+
+
+(** testing password, AES-256 encryptor and decryptor *)
+let password = "nano15532"
+
+let encryptor, decryptor =
+  let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
+  (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
+
 (********************** STAGE III *********************)
 
-
+(** need to use something similar to "select" *)
 let handle_stage_III buf n local_args remote_args =
   encryptor ~plain:(String.slice buf 3 n) >>=
   (fun enctext ->
-     return (Writer.write remote_args.w enctext) >>=
-       fun () ->
+     return (Writer.write remote_args.w enctext) >>= 
+       fun () -> return ()) (* TODO *)
 
 
 
@@ -104,10 +115,8 @@ let stage_III buf n local_args =
     } in handle_stage_III buf n local_args remote_args
   )
 
+(** STAGE II *)
 
-
-
-(********************** STAGE II *********************)
 let parse_dst_addr atyp buf = 
   match () with
   | () when atyp = 1 -> 
@@ -173,11 +182,8 @@ let stage_II buf local_args =
                 (fun req -> handle_req_stage_II buf n req local_args)
   ) 
 
+(** STAGE I *)
 
-
-
-
-(********************** STAGE I *********************)
 (** string -> init_req Deferred.t *)
 let parse_stage_I req req_len = 
   return 
@@ -205,9 +211,8 @@ let stage_I buf n local_args =
 
 (********************** MAIN PART *********************)
 
-
 let start_listen _ r w =
-    let buf = String.create 4096 in
+    let buf = String.create (4096 * 16) in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
       | `Ok n -> begin
@@ -217,13 +222,10 @@ let start_listen _ r w =
             w = w;
           } in stage_I buf n local_args end)
 
-
 let server () =
   message "local side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore start_listen
-
-
 
 let () = server () |> ignore
 

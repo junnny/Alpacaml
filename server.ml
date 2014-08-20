@@ -1,3 +1,17 @@
+(* Copyright (C) 2014 marklrh
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ * 
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>. *)
+
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
@@ -6,18 +20,13 @@ module Socket = Unix.Socket
 module Fd = Unix.Fd
 module Inet_addr = Unix.Inet_addr
 
-let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer= Lazy.force Writer.stderr
-let message s = Writer.write stdout_writer s
-let warn s = Writer.write stderr_writer s
-
-let finished () = shutdown 0
-
+(** hardcoded info *)
 let listening_port = 61115
 
 let remote_host = "127.0.0.1"
 let remote_port = 61111 
 
+(** a general exception *)
 exception Error of string
 
 (** type declaration *)
@@ -55,6 +64,10 @@ let read_and_review buf args =
          Ivar.fill finished ();)
   )
 
+let stdout_writer = Lazy.force Writer.stdout
+let stderr_writer= Lazy.force Writer.stderr
+let message s = Writer.write stdout_writer s
+let warn s = Writer.write stderr_writer s
 
 (** turn binary bit from string to int, helper function
     pos should be in range
@@ -74,21 +87,8 @@ let encryptor, decryptor =
 
 (** STAGE II *)
 
+(** need to use something similar to "select" *)
 let handle_stage_II buf local_args remote_args =
-  let rec transfer local_args remote_args =
-    Reader.read local_args.r buf >>= (fun req ->
-      | `Eof -> raise (Error "Unexpected EOF\n");
-      | `Ok n -> begin
-          let plain = decryptor (String.slice buf 0 n) in
-          message plain;
-          return (Writer.write ~pos:0 ~len:n remote_args.w buf) >>=
-            fun () -> 
-
-
-
-    )
-
-
 
 
 let stage_II req buf local_args =
@@ -160,7 +160,7 @@ let stage_I buf n local_args =
     fun req -> stage_II req buf local_args)
 
 let start_listen _ r w =
-    let buf = String.create 4096 in
+    let buf = String.create (4096 * 16) in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
       | `Ok n -> begin
