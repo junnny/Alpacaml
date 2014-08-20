@@ -20,27 +20,21 @@ let remote_port = 61111
 
 exception Error of string
 
+(** type declaration *)
 type args = {
   r : Reader.t;
   w : Writer.t;
 };;
 
 
-
-type init_req = {
-  ver : int;
-  nmethods : int;
-  methods : int list;
-};;
-
 type detail_req = {
   atyp : int;
-  dst_addr: string;
+  dst_host: string;
   dst_port: int;
 };;
 
 
-
+(** Some debugging function *)
 let view_request buf n = 
   let poses = List.range 0 n in
   let print_binary p = 
@@ -61,67 +55,100 @@ let read_and_review buf args =
          Ivar.fill finished ();)
   )
 
-(** pos should be in range *)
-(** string -> int -> int Deferred.t *)
+
+(** turn binary bit from string to int, helper function
+    pos should be in range
+    string -> int -> int Deferred.t *)
 let get_bin req pos =
   let req_len = String.length req in
   if (pos < 0) || (pos >= req_len) then assert false (* should remove in release version *)
   else unpack_unsigned_8 ~buf:req ~pos
 
 
+(** testing password, AES-256 encryptor and decryptor *)
 let password = "nano15532"
 
 let encryptor, decryptor =
   let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
   (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
 
-let parse_dst_addr atyp buf = 
+(** STAGE II *)
+
+let handle_stage_II buf local_args remote_args =
+  
+
+
+
+
+let stage_II req buf local_args =
+  Tcp.with_connection 
+  (Tcp.to_host_and_port local_args.dst_host local_args.dst_port)
+  (fun _ r w ->
+    let remote_args =
+    {
+      r = r;
+      w = w;
+    } in handle_stage_II buf local_args remote_args
+  )
+
+(** STAGE I, 
+    decrypt request from local, 
+    parse request,
+    further request to STAGE II *)
+
+let parse_dst_host_and_port atyp buf = 
   match () with
   | () when atyp = 1 -> 
       begin
-        let addr_buf = Bigbuffer.create 16 in
-        let rec build_addr s e =
-          if s = e then Bigbuffer.contents addr_buf else 
-            (get_bin buf s |> string_of_int |> Bigbuffer.add_string addr_buf;
-             if s < (e - 1) then Bigbuffer.add_char addr_buf '.';
-            build_addr (s + 1) e)
-        in build_addr 4 8
+        let host_buf = Bigbuffer.create 20 in
+        let rec build_host s e =
+          if s = e then Bigbuffer.contents host_buf else 
+            (get_bin buf s |> string_of_int |> Bigbuffer.add_string host_buf;
+             if s < (e - 1) then Bigbuffer.add_char host_buf '.';
+            build_host (s + 1) e)
+        in
+        let dst_host = build_host 1 5 in
+        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:5 in
+        (dst_host, dst_port)
       end
   | () when atyp = 3 ->
       begin 
-        let addr_length = get_bin buf 4 in
-        message (Printf.sprintf "%d\n\n" addr_length);
-        let addr_buf = Bigbuffer.create addr_length in
-        let rec build_addr s e =
-          if s = e then Bigbuffer.contents addr_buf else
-            (get_bin buf s |> char_of_int |> Bigbuffer.add_char addr_buf;
-            build_addr (s + 1) e)
-          in build_addr 5 (5 + addr_length)
+        let host_length = get_bin buf 1 in
+        let host_buf = Bigbuffer.create host_length in
+        let rec build_host s e =
+          if s = e then Bigbuffer.contents host_buf else
+            (get_bin buf s |> char_of_int |> Bigbuffer.add_char host_buf;
+            build_host (s + 1) e)
+        in 
+        let dst_host = build_host 2 (2 + host_length) in
+        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:(2 + host_length) in
+        (dst_port, dst_port)
       end
-  | _ -> raise (Error "Address type not supported yet\n")
-
+  | _ -> raise (Error "IPV6 is not supported yet\n")
 
 let parse_dst_port req_len req =
-  unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
+  unpack_unsigned_16_big_endian 
+  ~buf:req ~pos:(req_len - 2)
 
-let parse_stage_II req req_len =
+let parse_stage_I req =
   Deferred.create (function r ->
     let atyp = get_bin req 0 in
-    let dst_addr = parse_dst_addr atyp req in
-    let dst_port = parse_dst_port req_len req in
+    let dst_host, dst_port = parse_dst_host_and_port atyp req in
+    (Printf.sprintf "atyp: %d, dst_host: %s, port : %d" atyp dst_host dst_port) |> message;
     Ivar.fill r
     {
       atyp = atyp;
-      dst_addr = dst_addr;
+      dst_host = dst_host;
       dst_port = dst_port;
     }
   )
 
 let stage_I buf n local_args =
   decryptor (String.slice buf 0 n) >>=
-  (fun plain -> view_request plain n; return ())
+  (fun plain -> parse_stage_I plain >>=
+    fun req -> stage_II req buf local_args)
 
-let start_listen addr r w =
+let start_listen _ r w =
     let buf = String.create 4096 in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")

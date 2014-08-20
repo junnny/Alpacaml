@@ -23,7 +23,7 @@ let finished () = shutdown 0
 let listening_port = 61115
 
 let remote_host = "127.0.0.1"
-let remote_port = 61111 
+let remote_port = 61111
 
 exception Error of string
 
@@ -31,8 +31,6 @@ type args = {
   r : Reader.t;
   w : Writer.t;
 };;
-
-
 
 type init_req = {
   ver : int;
@@ -48,39 +46,6 @@ type detail_req = {
   dst_addr: string;
   dst_port: int;
 };;
-
-
-(*
-
-The client connects to the server, and sends a version
-   identifier/method selection message:
-
-        +----+----------+----------+
-        |VER | NMETHODS | METHODS  |
-        +----+----------+----------+
-        | 1  |    1     | 1 to 255 |
-        +----+----------+----------+
-
-
-The server selects from one of the methods given in METHODS, and
-   sends a METHOD selection message:
-
-              +----+--------+
-              |VER | METHOD |
-              +----+--------+
-              | 1  |   1    |
-              +----+--------+
-
-
- The SOCKS request is formed as follows:
-
-+----+-----+-------+------+----------+----------+
-|VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
-+----+-----+-------+------+----------+----------+
-| 1  |  1  | X'00' |  1   | Variable |    2     |
-+----+-----+-------+------+----------+----------+
-
-*)
 
 let password = "nano15532"
 
@@ -120,12 +85,12 @@ let get_bin req pos =
 
 (********************** STAGE III *********************)
 
-let remote_host = "localhost"
 
-let handle_stage_III buf n _ remote_args =
+let handle_stage_III buf n local_args remote_args =
   encryptor ~plain:(String.slice buf 3 n) >>=
   (fun enctext ->
-     Writer.write remote_args.w enctext; return ())
+     return (Writer.write remote_args.w enctext) >>=
+       fun () ->
 
 
 
