@@ -75,7 +75,18 @@ let encryptor, decryptor =
 (** STAGE II *)
 
 let handle_stage_II buf local_args remote_args =
-  
+  let rec transfer local_args remote_args =
+    Reader.read local_args.r buf >>= (fun req ->
+      | `Eof -> raise (Error "Unexpected EOF\n");
+      | `Ok n -> begin
+          let plain = decryptor (String.slice buf 0 n) in
+          message plain;
+          return (Writer.write ~pos:0 ~len:n remote_args.w buf) >>=
+            fun () -> 
+
+
+
+    )
 
 
 
