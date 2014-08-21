@@ -35,13 +35,13 @@ type args = {
   w : Writer.t;
 };;
 
-type init_req = {
+type local_init_req = {
   ver : int;
   nmethods : int;
   methods : int list;
 };;
 
-type detail_req = {
+type local_detail_req = {
   ver : int;
   cmd : int;
   rsv : int;
@@ -51,6 +51,12 @@ type detail_req = {
 };;
 
 (** Some debugging functions *)
+
+
+let stdout_writer = Lazy.force Writer.stdout
+let stderr_writer= Lazy.force Writer.stderr
+let message s = Writer.write stdout_writer s
+let warn s = Writer.write stderr_writer s
 
 (** not fully deferred *)
 let view_request buf n = 
@@ -81,10 +87,6 @@ let get_bin req pos =
   if (pos < 0) || (pos >= req_len) then assert false
   else unpack_unsigned_8 ~buf:req ~pos
 
-let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer= Lazy.force Writer.stderr
-let message s = Writer.write stdout_writer s
-let warn s = Writer.write stderr_writer s
 
 
 (** testing password, AES-256 encryptor and decryptor *)
@@ -94,6 +96,51 @@ let encryptor, decryptor =
   let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
   (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
 
+
+(** STAGE IV *)
+
+let handle_remote res ~buf ~local_args =
+  match res with
+  | `Eof ->
+      don't_wait_for (Writer.flushed local_args.w); 
+      `Remote_closed
+      (* Do I need to manually close connection ? *)
+  | `Ok n ->
+      (decryptor ~cipher:(String.slice buf 0 n) >>= (fun e -> 
+       return (Writer.write local_args.w e))) |> don't_wait_for;
+      `Local_sent
+
+let handle_local res ~buf ~remote_args =
+  match res with
+  | `Eof -> `EOF_when_reading_local
+  | `Ok n ->
+       (encryptor ~plain:(String.slice buf 0 n) >>= (fun d -> 
+        return (Writer.write remote_args.w d))) |> don't_wait_for;
+       `Remote_sent
+
+
+(** need to use something similar to "select" *)
+let rec stage_IV buf local_args remote_args =
+  message "Entering stage IV\n";
+  let remote = 
+    choice (Reader.read remote_args.r buf) 
+    (handle_remote ~buf ~local_args)
+  and local = 
+    choice (Reader.read local_args.r buf) 
+    (handle_local ~buf ~remote_args)
+  in
+  choose [remote; local] >>=
+  (function
+  (* Finish reading all remote data, close connection *)
+  | `Remote_closed -> message "Remote closed\n"; return () 
+  (* Encrypted data sent to local, maybe more data to sent, recursively call function *)
+  | `Local_sent -> message "Data sent to CURL\n"; stage_IV buf local_args remote_args
+  (* EOF when reading from local, should not happen since connection is still active *)
+  | `EOF_when_reading_local -> message "EOF when reading from remote"; raise (Error "SHIT\n")
+  (* Further more local request *)
+  | `Remote_sent -> message "Data sent to remote server\n"; stage_IV buf local_args remote_args)
+
+
 (********************** STAGE III *********************)
 
 (** need to use something similar to "select" *)
@@ -101,7 +148,7 @@ let handle_stage_III buf n local_args remote_args =
   encryptor ~plain:(String.slice buf 3 n) >>=
   (fun enctext ->
      return (Writer.write remote_args.w enctext) >>= 
-       fun () -> return ()) (* TODO *)
+       fun () -> stage_IV buf local_args remote_args)
 
 
 
@@ -212,7 +259,7 @@ let stage_I buf n local_args =
 (********************** MAIN PART *********************)
 
 let start_listen _ r w =
-    let buf = String.create (4096 * 16) in
+    let buf = String.create 4096 in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
       | `Ok n -> begin
@@ -225,7 +272,7 @@ let start_listen _ r w =
 let server () =
   message "local side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
-  ~on_handler_error:`Ignore start_listen
+  ~on_handler_error:`Raise start_listen
 
 let () = server () |> ignore
 

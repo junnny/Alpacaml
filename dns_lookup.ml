@@ -15,7 +15,9 @@
 open Core.Std
 open Async.Std
 
-let host = ["www.gutenberg.org/cache/epub/2600/pg2600.txt"; "www.bilibili.tv"; "www.zhihu.com"]
+let host = [ "www.gutenberg.org/cache/epub/2600/pg2600.txt"
+           ; "www.bilibili.tv"
+           ; "www.zhihu.com"]
 
 let rec dns_lookup domains =
   match domains with

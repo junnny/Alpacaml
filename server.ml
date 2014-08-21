@@ -21,10 +21,9 @@ module Fd = Unix.Fd
 module Inet_addr = Unix.Inet_addr
 
 (** hardcoded info *)
-let listening_port = 61115
+let listening_port = 61111
 
-let remote_host = "127.0.0.1"
-let remote_port = 61111 
+let buf_size = 4096
 
 (** a general exception *)
 exception Error of string
@@ -36,7 +35,7 @@ type args = {
 };;
 
 
-type detail_req = {
+type remote_req = {
   atyp : int;
   dst_host: string;
   dst_port: int;
@@ -44,6 +43,13 @@ type detail_req = {
 
 
 (** Some debugging function *)
+
+
+let stdout_writer = Lazy.force Writer.stdout
+let stderr_writer= Lazy.force Writer.stderr
+let message s = Writer.write stdout_writer s
+let warn s = Writer.write stderr_writer s
+
 let view_request buf n = 
   let poses = List.range 0 n in
   let print_binary p = 
@@ -64,10 +70,6 @@ let read_and_review buf args =
          Ivar.fill finished ();)
   )
 
-let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer= Lazy.force Writer.stderr
-let message s = Writer.write stdout_writer s
-let warn s = Writer.write stderr_writer s
 
 (** turn binary bit from string to int, helper function
     pos should be in range
@@ -87,13 +89,54 @@ let encryptor, decryptor =
 
 (** STAGE II *)
 
+let handle_remote res ~buf ~local_args =
+  match res with
+  | `Eof ->
+      don't_wait_for (Writer.flushed local_args.w); 
+      `Remote_closed
+      (* Do I need to manually close connection ? *)
+  | `Ok n ->
+      (encryptor ~plain:(String.slice buf 0 n) >>= (fun e -> 
+       return (Writer.write local_args.w e))) |> don't_wait_for;
+      `Local_sent
+
+let handle_local res ~buf ~remote_args =
+  match res with
+  | `Eof -> `EOF_when_reading_local
+  | `Ok n -> 
+       (decryptor ~cipher:(String.slice buf 0 n) >>= (fun d -> 
+        return (Writer.write remote_args.w d))) |> don't_wait_for;
+       `Remote_sent
+
+
 (** need to use something similar to "select" *)
-let handle_stage_II buf local_args remote_args =
+let rec handle_stage_II buf local_args remote_args =
+  message "Entering handle stage II\n";
+  let remote = 
+    choice (Reader.read remote_args.r buf) 
+    (handle_remote ~buf ~local_args)
+  and local = 
+    choice (Reader.read local_args.r buf) 
+    (handle_local ~buf ~remote_args)
+  in choose [remote; local] >>=
+  (function
+  (* Finish reading all remote data, close connection *)
+  | `Remote_closed -> message "Remote closed\n"; return () 
+  (* Encrypted data sent to local, maybe more data to sent, recursively call function *)
+  | `Local_sent -> message "Data sent back to local side\n "; handle_stage_II buf local_args remote_args
+  (* EOF when reading from local, should not happen since connection is still active *)
+  | `EOF_when_reading_local -> message "Local side closed"; raise (Error "SHIT @ LINE 125 \n")
+  (* Further more local request *)
+  | `Remote_sent -> message "Request sent to resource server"; handle_stage_II buf local_args remote_args)
+
+
+
+
 
 
 let stage_II req buf local_args =
   Tcp.with_connection 
-  (Tcp.to_host_and_port local_args.dst_host local_args.dst_port)
+  (Tcp.to_host_and_port req.dst_host req.dst_port)
   (fun _ r w ->
     let remote_args =
     {
@@ -119,8 +162,8 @@ let parse_dst_host_and_port atyp buf =
             build_host (s + 1) e)
         in
         let dst_host = build_host 1 5 in
-        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:5 in
-        (dst_host, dst_port)
+        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:5
+        in (dst_host, dst_port)
       end
   | () when atyp = 3 ->
       begin 
@@ -133,7 +176,7 @@ let parse_dst_host_and_port atyp buf =
         in 
         let dst_host = build_host 2 (2 + host_length) in
         let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:(2 + host_length) in
-        (dst_port, dst_port)
+        (dst_host, dst_port)
       end
   | _ -> raise (Error "IPV6 is not supported yet\n")
 
@@ -145,7 +188,7 @@ let parse_stage_I req =
   Deferred.create (function r ->
     let atyp = get_bin req 0 in
     let dst_host, dst_port = parse_dst_host_and_port atyp req in
-    (Printf.sprintf "atyp: %d, dst_host: %s, port : %d" atyp dst_host dst_port) |> message;
+    (Printf.sprintf "atyp: %d, dst_host: %s, port : %d\n" atyp dst_host dst_port) |> message;
     Ivar.fill r
     {
       atyp = atyp;
@@ -155,12 +198,12 @@ let parse_stage_I req =
   )
 
 let stage_I buf n local_args =
-  decryptor (String.slice buf 0 n) >>=
+  decryptor ~cipher:(String.slice buf 0 n) >>=
   (fun plain -> parse_stage_I plain >>=
     fun req -> stage_II req buf local_args)
 
 let start_listen _ r w =
-    let buf = String.create (4096 * 16) in
+    let buf = String.create 4096 in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
       | `Ok n -> begin
@@ -173,8 +216,8 @@ let start_listen _ r w =
 
 let server () =
   message "remote side server starts\n";
-  Tcp.Server.create (Tcp.on_port remote_port) 
-  ~on_handler_error:`Ignore start_listen
+  Tcp.Server.create (Tcp.on_port listening_port) 
+  ~on_handler_error:`Raise start_listen
 
 
 
