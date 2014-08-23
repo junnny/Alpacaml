@@ -15,6 +15,7 @@
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
+open Core_extended.Extended_string
 
 module Socket = Unix.Socket
 module Fd = Unix.Fd
@@ -102,36 +103,38 @@ let rec handle_remote ~buf ~local_args ~remote_args =
       (message (Printf.sprintf "View Plain text from website: \n"));
       view_request buf n;
       encryptor ~plain:(String.slice buf 0 n) >>= (fun ctext -> 
-        Writer.write local_args.w ctext;
+        message (Printf.sprintf "%d bytes to write\n" (String.length (String.escaped ctext)));
+        Writer.write_line local_args.w (String.escaped ctext);
         Writer.flushed local_args.w >>= (fun () ->
-         handle_remote ~buf ~local_args ~remote_args))
+        handle_remote ~buf ~local_args ~remote_args))
       end
 
-let rec handle_local ~buf ~local_args ~remote_args =
-  message "Entering handle_local\n"; Reader.read local_args.r buf >>= function
+let rec handle_local ~local_args ~remote_args =
+  message "Entering handle_local\n"; 
+  Reader.read_line local_args.r >>= function
   | `Eof -> return ()
-  | `Ok n -> begin 
-      (message (Printf.sprintf "Receive %d encrypted bytes from local\n" n));
-      decryptor ~cipher:(String.slice buf 0 n) >>= (fun ptext ->
+  | `Ok encrypted_req -> begin 
+      return (unescaped encrypted_req) >>= (fun unes_req ->
+      decryptor ~cipher:unes_req >>= (fun ptext ->
         (message (Printf.sprintf "View plain text from remote: \n"));
         view_request ptext (String.length ptext);
         Writer.write remote_args.w ptext;
         Writer.flushed remote_args.w >>= (fun () ->
-        handle_local ~buf ~local_args ~remote_args))
+        handle_local ~local_args ~remote_args)))
       end
 
 
 (** need to use something similar to "select" *)
-let handle_stage_II buf_l local_args remote_args =
-  let buf_r = String.create 4096 in
+let handle_stage_II local_args remote_args =
   message "defer both\n";
+  let buf = String.create 4096 in
   (Deferred.both 
-  (handle_remote ~buf:buf_r ~local_args ~remote_args)
-  (handle_local ~buf:buf_l ~local_args ~remote_args))
+  (handle_remote ~buf ~local_args ~remote_args)
+  (handle_local ~local_args ~remote_args))
   >>= fun ((), ()) -> return ()
 
 
-let stage_II req buf local_args =
+let stage_II req local_args =
   Tcp.with_connection ~timeout:(sec 10000000.)
   (Tcp.to_host_and_port req.dst_host req.dst_port)
   (fun _ r w ->
@@ -139,7 +142,7 @@ let stage_II req buf local_args =
     {
       r = r;
       w = w;
-    } in message "remote entering stage II\n"; handle_stage_II buf local_args remote_args
+    } in message "remote entering stage II\n"; handle_stage_II local_args remote_args
   )
 
 (** STAGE I, 
@@ -186,6 +189,7 @@ let parse_stage_I req =
     let atyp = get_bin req 0 in
     let dst_host, dst_port = parse_dst_host_and_port atyp req in
     (Printf.sprintf "atyp: %d, dst_host: %s, port : %d\n" atyp dst_host dst_port) |> message;
+    (Printf.sprintf "request length!!!!: %d\n" (String.length req)) |> message;
     Ivar.fill r
     {
       atyp = atyp;
@@ -194,25 +198,24 @@ let parse_stage_I req =
     }
   )
 
-let stage_I buf n local_args =
-  decryptor ~cipher:(String.slice buf 0 n) >>=
+let stage_I req local_args =
+  return (unescaped req) >>= (fun unes_req -> decryptor ~cipher:unes_req >>=
   (fun plain -> 
     message (Printf.sprintf "STAGE_I receive local request, view now\n");
-    view_request plain (String.length plain);
     parse_stage_I plain >>=
-    fun req -> stage_II req buf local_args)
+    fun req -> stage_II req local_args))
 
 let start_listen _ r w =
     message "\n******************************* NEW CONNECTION ******************************\n";
-    let buf = String.create 4096 in
-    (Reader.read r buf) >>= (function
+    (Reader.read_line r) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
-      | `Ok n -> begin
+      | `Ok req ->
           let local_args = 
           {
             r = r;
             w = w;
-          } in stage_I buf n local_args end)
+          } in stage_I req local_args
+    )
 
 
 let server () =

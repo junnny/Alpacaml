@@ -15,6 +15,7 @@
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
+open Core_extended.Extended_string
 
 module Fd = Unix.Fd
 module Inet_addr = Unix.Inet_addr
@@ -103,18 +104,17 @@ let encryptor, decryptor =
 
 (** STAGE IV *)
 
-let rec handle_remote ~buf ~local_args ~remote_args =
-  Reader.read remote_args.r buf >>= function
+let rec handle_remote ~local_args ~remote_args =
+  Reader.read_line remote_args.r >>= function
   | `Eof -> Writer.flushed local_args.w
-  | `Ok n -> begin 
-      (message (Printf.sprintf "Receive %d encrypted bytes from remote\n" n));
-
-      decryptor ~cipher:(String.slice buf 0 n) >>= (fun ptext -> 
+  | `Ok encrypted_data -> begin
+      message (Printf.sprintf "%d bytes received\n" (String.length encrypted_data));
+      return (unescaped encrypted_data) >>= (fun unes_data ->
+        decryptor ~cipher:unes_data >>= (fun ptext -> 
          (message (Printf.sprintf "View plain text from remote: \n"));
          view_request ptext (String.length ptext);
          Writer.write local_args.w ptext;
-         Writer.flushed local_args.w >>= (fun () ->
-         handle_remote ~buf ~local_args ~remote_args))
+         handle_remote ~local_args ~remote_args))
       end
 
 let rec handle_local ~buf ~local_args ~remote_args =
@@ -125,18 +125,16 @@ let rec handle_local ~buf ~local_args ~remote_args =
       (message (Printf.sprintf "View plain text from local: \n"));
       view_request buf n;
       encryptor ~plain:(String.slice buf 0 n) >>= (fun ctext ->
-        Writer.write remote_args.w ctext;
-        Writer.flushed remote_args.w >>= (fun () -> message "Writer flushed\n";
-        handle_local ~buf ~local_args ~remote_args))
+        Writer.write_line remote_args.w (String.escaped ctext);
+        handle_local ~buf ~local_args ~remote_args)
       end
 
 
 (** need to use something similar to "select" *)
-let stage_IV buf_l local_args remote_args =
-  let buf_r = String.create 4096 in
+let stage_IV buf local_args remote_args =
   (Deferred.both 
-  (handle_remote ~buf:buf_r ~local_args ~remote_args)
-  (handle_local ~buf:buf_l ~local_args ~remote_args))
+  (handle_remote ~local_args ~remote_args)
+  (handle_local ~buf ~local_args ~remote_args))
   >>= fun ((), ()) -> return ()
 
 
@@ -146,9 +144,8 @@ let stage_IV buf_l local_args remote_args =
 let handle_stage_III buf n local_args remote_args =
   encryptor ~plain:(String.slice buf 3 n) >>=
   (fun enctext ->
-     Writer.write remote_args.w enctext;
-     Writer.flushed remote_args.w >>= 
-       fun () -> stage_IV buf local_args remote_args)
+     Writer.write_line remote_args.w (String.escaped enctext);
+     stage_IV buf local_args remote_args)
 
 
 
@@ -226,6 +223,7 @@ let stage_II buf local_args =
     | `Ok n -> parse_stage_II buf n >>= 
                 (fun req -> handle_req_stage_II buf n req local_args)
   ) 
+
 
 (** STAGE I *)
 
