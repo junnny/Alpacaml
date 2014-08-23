@@ -49,15 +49,15 @@ type remote_req = {
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer= Lazy.force Writer.stderr
 
-let message s = 
+let message s = () (*
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer 
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer *)
 
-let warn s = 
+let warn s = () (*
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer*)
 
-let one_byte_message s = Writer.write stdout_writer s
+let one_byte_message s = () (*Writer.write stdout_writer s*)
 
 let view_request buf n = 
   let poses = List.range 0 n in
@@ -97,7 +97,7 @@ let encryptor, decryptor =
 let rec handle_remote ~buf ~local_args ~remote_args =
   message "Entering handle_remote\n";
   Reader.read remote_args.r buf >>= function
-  | `Eof -> Writer.flushed local_args.w
+  | `Eof -> Writer.flushed local_args.w >>= (fun () -> Writer.close local_args.w >>= (fun () -> Writer.close remote_args.w))
   | `Ok n -> begin 
       (message (Printf.sprintf "Receive %d plain bytes from website\n" n));
       (message (Printf.sprintf "View Plain text from website: \n"));
@@ -221,7 +221,7 @@ let start_listen _ r w =
 let server () =
   message "remote side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
-  ~on_handler_error:`Raise start_listen
+  ~on_handler_error:`Ignore start_listen
 
 
 

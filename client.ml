@@ -56,15 +56,15 @@ type local_detail_req = {
 
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer = Lazy.force Writer.stderr
-let message s = 
+let message s = () (*
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer 
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer*) 
 
-let warn s = 
+let warn s = () (*
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer*)
 
-let one_byte_message s = Writer.write stdout_writer s
+let one_byte_message s = () (*Writer.write stdout_writer s*)
 
 (** not fully deferred *)
 let view_request buf n = 
@@ -106,7 +106,7 @@ let encryptor, decryptor =
 
 let rec handle_remote ~local_args ~remote_args =
   Reader.read_line remote_args.r >>= function
-  | `Eof -> Writer.flushed local_args.w
+  | `Eof -> Writer.flushed local_args.w >>= (fun () -> Writer.close local_args.w >>= (fun () -> Writer.close remote_args.w))
   | `Ok encrypted_data -> begin
       message (Printf.sprintf "%d bytes received\n" (String.length encrypted_data));
       return (unescaped encrypted_data) >>= (fun unes_data ->
@@ -269,7 +269,7 @@ let start_listen _ r w =
 let server () =
   message "local side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
-  ~on_handler_error:`Raise start_listen
+  ~on_handler_error:`Ignore start_listen
 
 let () = server () |> ignore
 
