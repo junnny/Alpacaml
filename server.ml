@@ -47,18 +47,23 @@ type remote_req = {
 
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer= Lazy.force Writer.stderr
-let message s = Writer.write stdout_writer s
-let warn s = Writer.write stderr_writer s
+
+let message s = 
+  (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer 
+
+let warn s = 
+  (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+
+let one_byte_message s = Writer.write stdout_writer s
 
 let view_request buf n = 
   let poses = List.range 0 n in
   let print_binary p = 
     let bin = unpack_unsigned_8 ~buf ~pos:p in
-    message (Printf.sprintf "|%d| " bin)
-  in message "Viewing request:\n"; List.iter poses ~f:print_binary;
-  message "\nShowing port: ";
-  let port = unpack_unsigned_16_big_endian ~buf ~pos:(n - 2) in
-  message (Printf.sprintf "%d\n\n" port)
+    one_byte_message (Printf.sprintf "%c" (char_of_int bin))
+  in List.iter poses ~f:print_binary; one_byte_message "\n"
 
 let read_and_review buf args =
   Deferred.create (fun finished ->
@@ -87,62 +92,54 @@ let encryptor, decryptor =
   let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
   (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
 
-(** STAGE II *)
+(**************************************************************)
+let rec handle_remote ~buf ~local_args ~remote_args =
+  message "Entering handle_remote\n";
+  Reader.read remote_args.r buf >>= function
+  | `Eof -> Writer.flushed local_args.w
+  | `Ok n -> begin 
+      (message (Printf.sprintf "Receive %d plain bytes from website\n" n));
+      (message (Printf.sprintf "View Plain text from website: \n"));
+      view_request buf n;
+      encryptor ~plain:(String.slice buf 0 n) >>= (fun ctext -> 
+        Writer.write local_args.w ctext;
+        Writer.flushed local_args.w >>= (fun () ->
+         handle_remote ~buf ~local_args ~remote_args))
+      end
 
-let handle_remote res ~buf ~local_args =
-  match res with
-  | `Eof ->
-      don't_wait_for (Writer.flushed local_args.w); 
-      `Remote_closed
-      (* Do I need to manually close connection ? *)
-  | `Ok n ->
-      (encryptor ~plain:(String.slice buf 0 n) >>= (fun e -> 
-       return (Writer.write local_args.w e))) |> don't_wait_for;
-      `Local_sent
-
-let handle_local res ~buf ~remote_args =
-  match res with
-  | `Eof -> `EOF_when_reading_local
-  | `Ok n -> 
-       (decryptor ~cipher:(String.slice buf 0 n) >>= (fun d -> 
-        return (Writer.write remote_args.w d))) |> don't_wait_for;
-       `Remote_sent
+let rec handle_local ~buf ~local_args ~remote_args =
+  message "Entering handle_local\n"; Reader.read local_args.r buf >>= function
+  | `Eof -> return ()
+  | `Ok n -> begin 
+      (message (Printf.sprintf "Receive %d encrypted bytes from local\n" n));
+      decryptor ~cipher:(String.slice buf 0 n) >>= (fun ptext ->
+        (message (Printf.sprintf "View plain text from remote: \n"));
+        view_request ptext (String.length ptext);
+        Writer.write remote_args.w ptext;
+        Writer.flushed remote_args.w >>= (fun () ->
+        handle_local ~buf ~local_args ~remote_args))
+      end
 
 
 (** need to use something similar to "select" *)
-let rec handle_stage_II buf local_args remote_args =
-  message "Entering handle stage II\n";
-  let remote = 
-    choice (Reader.read remote_args.r buf) 
-    (handle_remote ~buf ~local_args)
-  and local = 
-    choice (Reader.read local_args.r buf) 
-    (handle_local ~buf ~remote_args)
-  in choose [remote; local] >>=
-  (function
-  (* Finish reading all remote data, close connection *)
-  | `Remote_closed -> message "Remote closed\n"; return () 
-  (* Encrypted data sent to local, maybe more data to sent, recursively call function *)
-  | `Local_sent -> message "Data sent back to local side\n "; handle_stage_II buf local_args remote_args
-  (* EOF when reading from local, should not happen since connection is still active *)
-  | `EOF_when_reading_local -> message "Local side closed"; raise (Error "SHIT @ LINE 125 \n")
-  (* Further more local request *)
-  | `Remote_sent -> message "Request sent to resource server"; handle_stage_II buf local_args remote_args)
-
-
-
-
+let handle_stage_II buf_l local_args remote_args =
+  let buf_r = String.create 4096 in
+  message "defer both\n";
+  (Deferred.both 
+  (handle_remote ~buf:buf_r ~local_args ~remote_args)
+  (handle_local ~buf:buf_l ~local_args ~remote_args))
+  >>= fun ((), ()) -> return ()
 
 
 let stage_II req buf local_args =
-  Tcp.with_connection 
+  Tcp.with_connection ~timeout:(sec 10000000.)
   (Tcp.to_host_and_port req.dst_host req.dst_port)
   (fun _ r w ->
     let remote_args =
     {
       r = r;
       w = w;
-    } in handle_stage_II buf local_args remote_args
+    } in message "remote entering stage II\n"; handle_stage_II buf local_args remote_args
   )
 
 (** STAGE I, 
@@ -199,10 +196,14 @@ let parse_stage_I req =
 
 let stage_I buf n local_args =
   decryptor ~cipher:(String.slice buf 0 n) >>=
-  (fun plain -> parse_stage_I plain >>=
+  (fun plain -> 
+    message (Printf.sprintf "STAGE_I receive local request, view now\n");
+    view_request plain (String.length plain);
+    parse_stage_I plain >>=
     fun req -> stage_II req buf local_args)
 
 let start_listen _ r w =
+    message "\n******************************* NEW CONNECTION ******************************\n";
     let buf = String.create 4096 in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
