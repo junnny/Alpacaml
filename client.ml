@@ -56,15 +56,15 @@ type local_detail_req = {
 
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer = Lazy.force Writer.stderr
-let message s = () (*
+let message s =
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer*) 
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer 
 
-let warn s = () (*
+let warn s = 
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer*)
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
 
-let one_byte_message s = () (*Writer.write stdout_writer s*)
+let one_byte_message s = Writer.write stdout_writer s
 
 (** not fully deferred *)
 let view_request buf n = 
