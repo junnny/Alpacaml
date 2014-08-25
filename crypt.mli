@@ -16,7 +16,6 @@ open Core.Std
 open Async.Std
 open Cryptokit
 
-
 (** auxiliary function, decode from hex *)
 val hex : s:string -> string
 
@@ -32,13 +31,11 @@ val deriveMd5 : s:string -> string
 (** implementation of OpenSSL's EVP_BytesToKey() *)
 val evpBytesToKey : pwd:string -> key_len:int -> iv_len:int -> (string * string)
 
-val prng : unit -> Random.rng
-
 (** a pseudo-random number generator using seed provided by
     a high-quality random number generator.
     Note: this implementation is suggested in Xavier Leroy's cryptokit.
 *)
-
+val prng : unit -> Random.rng
 
 (** AES cipher, support AES-128-
     key:    key, of length 16, 24 or 32
@@ -47,25 +44,23 @@ val prng : unit -> Random.rng
     plain:  plain-text, of arbitrary length
     cipher: cipher-text, of arbitrary length
 
-    Note: 1. The boxes process data by block of 128 bits (16 bytes)
-
-          2. No need to make encBox or decBox deferred since they
-             will by currying arguments *)
+    Note: 
+    1. The boxes process data by block of 128 bits (16 bytes)*)
+  
 module AES_Cipher : sig
-  type t
-    
+
   val encryptor : key:string -> iv:string -> ptext:string -> string Deferred.t
     
   val decryptor : key:string -> iv:string -> ctext:string -> string Deferred.t
 end
 
 (** Same AES cipher but with random generated IV every encryption *)
-module AES_Cipher_RandomIV :
-  sig
-    type t
-    val encryptor_r : key:string -> plain:string Deferred.t -> prng:Random.rng -> string Deferred.t
-    val decryptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
-  end
+module AES_Cipher_RandomIV : sig
 
+  val encryptor_r : key:string -> plain:string Deferred.t -> prng:Random.rng -> 
+                      string Deferred.t
+
+  val decryptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
+end
 
 (** TODO: add more encryption methods, like libsodium *)

@@ -37,7 +37,7 @@ let evpBytesToKey ~pwd ~key_len ~iv_len =
         | None -> pwd
         | Some c -> (c ^ pwd)
       in 
-      let nssli = List.append [deriveMd5 data] strli in
+      let nssli = List.append [deriveMd5 ~s:data] strli in
       derive nssli (i + 1) (lilen + 1)
     end
   in derive [] 0 0
@@ -47,13 +47,11 @@ let prng () = Random.pseudo_rng (Random.string Random.secure_rng 20)
 
 module AES_Cipher = struct
 
-  type t
-
   let encryptor ~key ~iv ~ptext = 
     let encBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Encrypt in
     return (transform_string encBox ptext)
 
-  let decryptor ~key ~iv ~ctext =
+  let decryptor ~key ~iv ~ctext  =
     let decBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt in
     return (transform_string decBox ctext)
 end
@@ -61,8 +59,6 @@ end
 
 
 module AES_Cipher_RandomIV = struct
-
-  type t
 
   let encryptor_r ~key ~plain ~prng =
     let riv = Random.string prng 16 in

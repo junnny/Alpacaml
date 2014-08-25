@@ -17,10 +17,6 @@ open Async.Std
 open Core_kernel.Binary_packing
 open Core_extended.Extended_string
 
-module Socket = Unix.Socket
-module Fd = Unix.Fd
-module Inet_addr = Unix.Inet_addr
-
 (** hardcoded info *)
 let listening_port = 61111
 
@@ -47,18 +43,18 @@ type remote_req = {
 
 
 (** Some debugging function *)
-
-
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer= Lazy.force Writer.stderr
 
 let message s = 
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
    (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer
+;;
 
 let warn s = 
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
    (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+;;
 
 let one_byte_message s = Writer.write stdout_writer s
 
@@ -68,6 +64,7 @@ let view_request buf n =
     let bin = unpack_unsigned_8 ~buf ~pos:p in
     one_byte_message (Printf.sprintf "%c" (char_of_int bin))
   in List.iter poses ~f:print_binary; one_byte_message "\n"
+;;
 
 let read_and_review buf args =
   Deferred.create (fun finished ->
@@ -80,22 +77,13 @@ let read_and_review buf args =
          Ivar.fill finished ()
          end)
   )
+;;
 
 
 (** turn binary bit from string to int, helper function
     pos should be in range
     string -> int -> int Deferred.t *)
-let get_bin req pos =
-  let req_len = String.length req in
-  if (pos < 0) || (pos >= req_len) then assert false 
-  (* should remove in release version *)
-  else unpack_unsigned_8 ~buf:req ~pos
-;;
-
-let af_enc_len n = 
-  let mo = (n % 16) in 
-  if mo = 0 then n else (16 - mo + n)
-;;
+let get_bin req pos = unpack_unsigned_8 ~buf:req ~pos
 
 (** testing password, AES-256 encryptor and decryptor *)
 let password = "nano15532"
@@ -103,10 +91,10 @@ let password = "nano15532"
 let encryptor, decryptor =
   let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
   (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
+;;
 
 (**************************************************************)
 let rec handle_remote ~buf ~local_args ~remote_args =
-  message "Entering handle_remote\n";
   Reader.read remote_args.r buf >>= 
   (function
     | `Eof -> Writer.close local_args.w >>= (fun () -> 
@@ -114,15 +102,13 @@ let rec handle_remote ~buf ~local_args ~remote_args =
     | `Ok n ->
         encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
           encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
-            message (Printf.sprintf "plain data bytes length : %d\n" n);
-            message (Printf.sprintf "encrypted data bytes length : %d\n" (String.length enc_text));
             Writer.write local_args.w enc_len;
             Writer.write local_args.w enc_text;
             handle_remote ~buf ~local_args ~remote_args))
   )
+;;
 
 let rec handle_local ~buf ~local_args ~remote_args =
-  message "Entering handle_local\n"; 
   Reader.really_read local_args.r ~pos:0 ~len:header_len buf >>= 
   (function
     | `Eof _ -> return () (*raise (Error "Local closed unexpectedly\n");*)
@@ -141,15 +127,16 @@ let rec handle_local ~buf ~local_args ~remote_args =
           )) 
         end
   )
+;;
 
 (** need to use something similar to "select" *)
 let handle_stage_II buf_local local_args remote_args =
-  message "defer both\n";
   let buf_remote = String.create send_buf_size in
   (Deferred.both 
   (handle_remote ~buf:buf_remote ~local_args ~remote_args)
   (handle_local ~buf:buf_local ~local_args ~remote_args))
   >>= fun ((), ()) -> return ()
+;;
 
 
 let stage_II buf req local_args =
@@ -161,9 +148,9 @@ let stage_II buf req local_args =
       r = r;
       w = w;
     } in
-    message "remote entering stage II\n"; 
     handle_stage_II buf local_args remote_args
   )
+;;
 
 (** STAGE I, 
     decrypt request from local, 
@@ -199,6 +186,7 @@ let parse_dst_host_and_port atyp buf =
         (dst_host, dst_port)
       end
   | _ -> raise (Error "IPV6 is not supported yet\n")
+;;
 
 let parse_dst_port req_len req =
   unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
@@ -207,8 +195,6 @@ let parse_stage_I req =
   Deferred.create (function r ->
     let atyp = get_bin req 0 in
     let dst_host, dst_port = parse_dst_host_and_port atyp req in
-    (Printf.sprintf "atyp: %d, dst_host: %s, port : %d\n" atyp dst_host dst_port) |> message;
-    (Printf.sprintf "request length!!!!: %d\n" (String.length req)) |> message;
     Ivar.fill r
     {
       atyp = atyp;
@@ -216,44 +202,38 @@ let parse_stage_I req =
       dst_port = dst_port;
     }
   )
+;;
 
 let stage_I buf req_len local_args =
-  message (Printf.sprintf "server stage_I to receiev: %d\n" req_len);
   Reader.really_read local_args.r ~pos:0 ~len:req_len buf >>=
   (function
     | `Eof _ -> raise (Error "Local closed unexpectedly")
     | `Ok -> decryptor ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
-               message "here";
                parse_stage_I raw_req >>= (fun req ->
-                stage_II buf req local_args))
+                 stage_II buf req local_args))
   )
+;;
 
 let start_listen _ r w =
-    message "******************";
-    message "* NEW CONNECTION *"; 
-    message "******************";
-    let buf = String.create recv_buf_size in
-    (Reader.really_read r ~pos:0 ~len:header_len buf) >>= 
-    (function
-      | `Eof _ -> raise (Error "Local closed unexpectedly")
-      | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
-          (fun req_len -> 
-            message (Printf.sprintf "req_len : %s\n" req_len);
-            let local_args =
-            {
-              r = r;
-              w = w;
-            } in stage_I buf (int_of_string req_len) local_args)
-    )
-
+  let buf = String.create recv_buf_size in
+  (Reader.really_read r ~pos:0 ~len:header_len buf) >>= 
+  (function
+    | `Eof _ -> raise (Error "Local closed unexpectedly")
+    | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
+        (fun req_len -> 
+          let local_args =
+          {
+            r = r;
+            w = w;
+          } in stage_I buf (int_of_string req_len) local_args)
+  )
+;;
 
 let server () =
-  message "remote side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore start_listen
+;;
 
-
-
-let () = server () |> ignore
+let () = ignore (server ())
 
 let () = never_returns (Scheduler.go ())

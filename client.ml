@@ -17,10 +17,6 @@ open Async.Std
 open Core_kernel.Binary_packing
 open Core_extended.Extended_string
 
-module Fd = Unix.Fd
-module Inet_addr = Unix.Inet_addr
-module Socket = Unix.Socket
-
 (** hardcoded info *)
 let listening_port = 61115
 
@@ -60,13 +56,16 @@ type local_detail_req = {
 
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer = Lazy.force Writer.stderr
+
 let message s =
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
    (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer 
+;;
 
 let warn s = 
   (Printf.sprintf "LOCAL ==> [ %s] : %s\n" 
    (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+;;
 
 let one_byte_message s = Writer.write stdout_writer s
 
@@ -77,6 +76,7 @@ let view_request buf n =
     let bin = unpack_unsigned_8 ~buf ~pos:p in
     one_byte_message (Printf.sprintf "%c" (char_of_int bin))
   in List.iter poses ~f:print_binary; one_byte_message "\n"
+;;
 
 let read_and_review buf args =
   Deferred.create (fun finished ->
@@ -87,16 +87,12 @@ let read_and_review buf args =
          view_request buf n;
          Ivar.fill finished ();)
   )
+;;
 
 (** turn binary bit from string to int, helper function
     pos should be in range
     string -> int -> int Deferred.t *)
-let get_bin req pos =
-  let req_len = String.length req in
-  if (pos < 0) || (pos >= req_len) then assert false
-  else unpack_unsigned_8 ~buf:req ~pos
-
-
+let get_bin req pos = unpack_unsigned_8 ~buf:req ~pos
 
 (** testing password, AES-256 encryptor and decryptor *)
 let password = "nano15532"
@@ -104,14 +100,9 @@ let password = "nano15532"
 let encryptor, decryptor =
   let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
   (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
-
-let af_enc_len n =
-  let mo = (n % 16) in
-  if mo = 0 then n else (16 - mo + n)
 ;;
 
 (** STAGE IV *)
-
 let rec handle_remote ~buf ~local_args ~remote_args =
   Reader.really_read remote_args.r ~pos:0 ~len:header_len buf >>=
   (function 
@@ -121,7 +112,6 @@ let rec handle_remote ~buf ~local_args ~remote_args =
         begin
         decryptor ~ctext:(String.slice buf 0 header_len) >>= (fun req_len ->
           let req_len = int_of_string req_len in
-          message (Printf.sprintf "TO RECEIVE length %d\n" req_len);
           Reader.really_read remote_args.r ~pos:0 ~len:req_len buf >>=
           (function
             | `Eof _ -> raise (Error "Local closed unexpectedly\n");
@@ -133,6 +123,7 @@ let rec handle_remote ~buf ~local_args ~remote_args =
           ))
         end
   )
+;;
 
 let rec handle_local ~buf ~local_args ~remote_args =
   Reader.read local_args.r buf >>= 
@@ -141,12 +132,11 @@ let rec handle_local ~buf ~local_args ~remote_args =
     | `Ok n ->
         encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
           encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
-            message (Printf.sprintf "plain text length : %d\n" n);
-            message (Printf.sprintf "encrypted text length : %d\n" (String.length enc_text));
             Writer.write remote_args.w enc_len;
             Writer.write remote_args.w enc_text;
             handle_local ~buf ~local_args ~remote_args))
   )
+;;
 
 (** need to use something similar to "select" *)
 let stage_IV buf_local local_args remote_args =
@@ -155,6 +145,7 @@ let stage_IV buf_local local_args remote_args =
   (handle_remote ~buf:buf_remote~local_args ~remote_args)
   (handle_local ~buf:buf_local ~local_args ~remote_args))
   >>= fun ((), ()) -> return ()
+;;
 
 
 (********************** STAGE III *********************)
@@ -164,13 +155,11 @@ let handle_stage_III buf n local_args remote_args =
   encryptor ~ptext:(String.slice buf 3 n) >>= (fun enc_text ->
     encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
       Writer.write remote_args.w enc_len;
-      view_request buf n;
-      message (Printf.sprintf "plain text length : %d\n" (n - 3));
-      message (Printf.sprintf "encrypted text length : %d\n" (String.length enc_text));
       Writer.write remote_args.w enc_text;
       stage_IV buf local_args remote_args
     )
   ) 
+;;
 
 let stage_III buf n local_args =
   Tcp.with_connection (Tcp.to_host_and_port remote_host remote_port)
@@ -181,9 +170,9 @@ let stage_III buf n local_args =
       w = w;
     } in handle_stage_III buf n local_args remote_args
   )
+;;
 
 (** STAGE II *)
-
 let parse_dst_addr atyp buf = 
   match () with
   | () when atyp = 1 -> 
@@ -207,6 +196,7 @@ let parse_dst_addr atyp buf =
           in build_addr 5 (5 + addr_length)
       end
   | _ -> raise (Error "Address type not supported yet\n")
+;;
 
 
 let parse_dst_port req_len req =
@@ -230,6 +220,7 @@ let parse_stage_II req req_len =
       dst_port = dst_port;
     }
   )
+;;
 
 let handle_req_stage_II buf n req local_args =
   match () with
@@ -241,15 +232,14 @@ let handle_req_stage_II buf n req local_args =
       stage_III buf n local_args
       end
   | _ -> warn (Printf.sprintf "CMD TYPE UNSUPPORTED : %d\n" req.cmd); return () 
-         (* not supported yet *)
+;;
 
 let stage_II buf local_args =
   (Reader.read local_args.r buf) >>= (function
-    | `Eof -> warn "Client ends connection unexpectedly\n"; return () (*raise (Error "Unexpected EOF\n")*)
+    | `Eof -> warn "Client ends connection unexpectedly\n"; return ()
     | `Ok n -> parse_stage_II buf n >>= 
                 (fun req -> handle_req_stage_II buf n req local_args)
   ) 
-
 
 (** STAGE I *)
 
@@ -261,6 +251,7 @@ let parse_stage_I req req_len =
     nmethods = get_bin req 1;
     methods = List.range 2 req_len |> List.map ~f:(get_bin req);
   }
+;;
 
 let stage_I buf n local_args = 
   parse_stage_I buf n >>= (fun init_req ->
@@ -276,12 +267,11 @@ let stage_I buf n local_args =
       end
       else raise (Error "*** Invalid request at STAGE: INIT ***\n")
     ))
+;;
 
 
 (********************** MAIN PART *********************)
-
 let start_listen _ r w =
-    message "\n******************************* NEW CONNECTION ******************************\n";
     let buf = String.create send_buf_size in
     (Reader.read r buf) >>= (function
       | `Eof -> raise (Error "Unexpected EOF\n")
@@ -291,12 +281,13 @@ let start_listen _ r w =
             r = r;
             w = w;
           } in stage_I buf n local_args end)
+;;
 
 let server () =
-  message "local side server starts\n";
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore start_listen
+;;
 
-let () = server () |> ignore
+let () = ignore (server ())
 
 let () = never_returns (Scheduler.go ())
