@@ -49,13 +49,13 @@ module AES_Cipher = struct
 
   type t
 
-  let encryptor ~key ~iv ~plain = 
+  let encryptor ~key ~iv ~ptext = 
     let encBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Encrypt in
-    return (transform_string encBox plain)
+    return (transform_string encBox ptext)
 
-  let decryptor ~key ~iv ~cipher =
+  let decryptor ~key ~iv ~ctext =
     let decBox = Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt in
-    return (transform_string decBox cipher)
+    return (transform_string decBox ctext)
 end
 
 

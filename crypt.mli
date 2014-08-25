@@ -54,9 +54,9 @@ val prng : unit -> Random.rng
 module AES_Cipher : sig
   type t
     
-  val encryptor : key:string -> iv:string -> plain:string -> string Deferred.t
+  val encryptor : key:string -> iv:string -> ptext:string -> string Deferred.t
     
-  val decryptor : key:string -> iv:string -> cipher:string -> string Deferred.t
+  val decryptor : key:string -> iv:string -> ctext:string -> string Deferred.t
 end
 
 (** Same AES cipher but with random generated IV every encryption *)

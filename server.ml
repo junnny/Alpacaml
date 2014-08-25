@@ -24,7 +24,10 @@ module Inet_addr = Unix.Inet_addr
 (** hardcoded info *)
 let listening_port = 61111
 
-let buf_size = 4096
+let send_buf_size = 4096
+let recv_buf_size = 4200
+
+let header_len = 16
 
 (** a general exception *)
 exception Error of string
@@ -71,9 +74,11 @@ let read_and_review buf args =
     upon (Reader.read args.r buf) (function
       |`Eof -> message "Unexpected EOF\n"; Ivar.fill finished ();
       |`Ok n ->
+         begin
          message (Printf.sprintf "Read %d bytes this time\n" n);
          view_request buf n;
-         Ivar.fill finished ();)
+         Ivar.fill finished ()
+         end)
   )
 
 
@@ -82,9 +87,15 @@ let read_and_review buf args =
     string -> int -> int Deferred.t *)
 let get_bin req pos =
   let req_len = String.length req in
-  if (pos < 0) || (pos >= req_len) then assert false (* should remove in release version *)
+  if (pos < 0) || (pos >= req_len) then assert false 
+  (* should remove in release version *)
   else unpack_unsigned_8 ~buf:req ~pos
+;;
 
+let af_enc_len n = 
+  let mo = (n % 16) in 
+  if mo = 0 then n else (16 - mo + n)
+;;
 
 (** testing password, AES-256 encryptor and decryptor *)
 let password = "nano15532"
@@ -96,53 +107,62 @@ let encryptor, decryptor =
 (**************************************************************)
 let rec handle_remote ~buf ~local_args ~remote_args =
   message "Entering handle_remote\n";
-  Reader.read remote_args.r buf >>= function
-  | `Eof -> Writer.flushed local_args.w >>= (fun () -> Writer.close local_args.w >>= (fun () -> Writer.close remote_args.w))
-  | `Ok n -> begin 
-      (message (Printf.sprintf "Receive %d plain bytes from website\n" n));
-      (message (Printf.sprintf "View Plain text from website: \n"));
-      view_request buf n;
-      encryptor ~plain:(String.slice buf 0 n) >>= (fun ctext -> 
-        message (Printf.sprintf "%d bytes to write\n" (String.length (String.escaped ctext)));
-        Writer.write_line local_args.w (String.escaped ctext);
-        Writer.flushed local_args.w >>= (fun () ->
-        handle_remote ~buf ~local_args ~remote_args))
-      end
+  Reader.read remote_args.r buf >>= 
+  (function
+    | `Eof -> Writer.close local_args.w >>= (fun () -> 
+                Reader.close remote_args.r)
+    | `Ok n ->
+        encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
+          encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
+            message (Printf.sprintf "plain data bytes length : %d\n" n);
+            message (Printf.sprintf "encrypted data bytes length : %d\n" (String.length enc_text));
+            Writer.write local_args.w enc_len;
+            Writer.write local_args.w enc_text;
+            handle_remote ~buf ~local_args ~remote_args))
+  )
 
-let rec handle_local ~local_args ~remote_args =
+let rec handle_local ~buf ~local_args ~remote_args =
   message "Entering handle_local\n"; 
-  Reader.read_line local_args.r >>= function
-  | `Eof -> return ()
-  | `Ok encrypted_req -> begin 
-      return (unescaped encrypted_req) >>= (fun unes_req ->
-      decryptor ~cipher:unes_req >>= (fun ptext ->
-        (message (Printf.sprintf "View plain text from remote: \n"));
-        view_request ptext (String.length ptext);
-        Writer.write remote_args.w ptext;
-        Writer.flushed remote_args.w >>= (fun () ->
-        handle_local ~local_args ~remote_args)))
-      end
-
+  Reader.really_read local_args.r ~pos:0 ~len:header_len buf >>= 
+  (function
+    | `Eof _ -> return () (*raise (Error "Local closed unexpectedly\n");*)
+    | `Ok -> 
+        begin
+        decryptor ~ctext:(String.slice buf 0 header_len) >>= (fun req_len ->
+          let req_len = int_of_string req_len in
+          Reader.really_read local_args.r ~pos:0 ~len:req_len buf >>= 
+          (function
+            | `Eof _ -> raise (Error "Local closed unexpectedly\n");
+            | `Ok -> 
+                decryptor 
+                ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
+                  Writer.write remote_args.w raw_req;
+                  handle_local ~buf ~local_args ~remote_args)
+          )) 
+        end
+  )
 
 (** need to use something similar to "select" *)
-let handle_stage_II local_args remote_args =
+let handle_stage_II buf_local local_args remote_args =
   message "defer both\n";
-  let buf = String.create 4096 in
+  let buf_remote = String.create send_buf_size in
   (Deferred.both 
-  (handle_remote ~buf ~local_args ~remote_args)
-  (handle_local ~local_args ~remote_args))
+  (handle_remote ~buf:buf_remote ~local_args ~remote_args)
+  (handle_local ~buf:buf_local ~local_args ~remote_args))
   >>= fun ((), ()) -> return ()
 
 
-let stage_II req local_args =
-  Tcp.with_connection ~timeout:(sec 10000000.)
+let stage_II buf req local_args =
+  Tcp.with_connection
   (Tcp.to_host_and_port req.dst_host req.dst_port)
   (fun _ r w ->
     let remote_args =
     {
       r = r;
       w = w;
-    } in message "remote entering stage II\n"; handle_stage_II local_args remote_args
+    } in
+    message "remote entering stage II\n"; 
+    handle_stage_II buf local_args remote_args
   )
 
 (** STAGE I, 
@@ -181,8 +201,7 @@ let parse_dst_host_and_port atyp buf =
   | _ -> raise (Error "IPV6 is not supported yet\n")
 
 let parse_dst_port req_len req =
-  unpack_unsigned_16_big_endian 
-  ~buf:req ~pos:(req_len - 2)
+  unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
 
 let parse_stage_I req =
   Deferred.create (function r ->
@@ -198,23 +217,33 @@ let parse_stage_I req =
     }
   )
 
-let stage_I req local_args =
-  return (unescaped req) >>= (fun unes_req -> decryptor ~cipher:unes_req >>=
-  (fun plain -> 
-    message (Printf.sprintf "STAGE_I receive local request, view now\n");
-    parse_stage_I plain >>=
-    fun req -> stage_II req local_args))
+let stage_I buf req_len local_args =
+  message (Printf.sprintf "server stage_I to receiev: %d\n" req_len);
+  Reader.really_read local_args.r ~pos:0 ~len:req_len buf >>=
+  (function
+    | `Eof _ -> raise (Error "Local closed unexpectedly")
+    | `Ok -> decryptor ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
+               message "here";
+               parse_stage_I raw_req >>= (fun req ->
+                stage_II buf req local_args))
+  )
 
 let start_listen _ r w =
-    message "\n******************************* NEW CONNECTION ******************************\n";
-    (Reader.read_line r) >>= (function
-      | `Eof -> raise (Error "Unexpected EOF\n")
-      | `Ok req ->
-          let local_args = 
-          {
-            r = r;
-            w = w;
-          } in stage_I req local_args
+    message "******************";
+    message "* NEW CONNECTION *"; 
+    message "******************";
+    let buf = String.create recv_buf_size in
+    (Reader.really_read r ~pos:0 ~len:header_len buf) >>= 
+    (function
+      | `Eof _ -> raise (Error "Local closed unexpectedly")
+      | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
+          (fun req_len -> 
+            message (Printf.sprintf "req_len : %s\n" req_len);
+            let local_args =
+            {
+              r = r;
+              w = w;
+            } in stage_I buf (int_of_string req_len) local_args)
     )
 
 
