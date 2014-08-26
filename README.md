@@ -13,14 +13,18 @@ written in OCaml.
 * 9gag.com, without whom I would have finished months earlier
 
 ###TO-DO
-* Support for libsodium, AES-256-CFB, AES-256-OFB and ARCFour encryption
+* Support for libsodium, AES-256-CFB, AES-256-OFB and ARCFour encryptions
 * Better encryption and decryption modules, more integrated with Async
 * UDP relay
 
 ###FAQ
 **Q**: How asynchrony is achieved?
 
-**A**: In an Monadic way. Specifically, through Async.Deferred.
+**A**: In a Monadic way. Specifically, through Async.Deferred.
+
+**Q**: Why encryption? Encryption is not enforced in RFC1928.
+
+**A**: Because f*ck GFW. That's why.
 
 **Q**: Why not use C, Python, or Node.js?
 
