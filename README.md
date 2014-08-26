@@ -1,7 +1,9 @@
 Alpacaml
 ========
-Still under construction and 
-the purpose of this project is intentionally not given.
+Alpacaml is a type-safe, Monadic, fully asynchronous and encrypted SOCKS5 proxy
+ 
+###Build
+    corebuild -pkg async,core_extended,cryptokit client.native server.native
 
 ### License
 GPL V3
