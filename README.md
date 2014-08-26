@@ -30,9 +30,7 @@ written in OCaml.
 
 **A**: F*ck C, f*ck Python and f*ck Node.js particularly. Alpaca also shows its indifference to Node.js:
 
-![pic](https://lh3.googleusercontent.com/-AFJqfp3NaDE/U_w2wu6LVzI/AAAAAAAABN4/uKzG2BqSTrc/w852-h764/alpaca_nodejs.gif).
-
-
+![pic](https://lh6.googleusercontent.com/-XlW6F95vMBU/U_w8rjY7trI/AAAAAAAABOw/WPfHuVuxQxQ/w852-h764/alpaca_loop_nodejs.gif)
 
 ### License
 GPL V3
