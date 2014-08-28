@@ -19,33 +19,24 @@ open Core_extended.Extended_string
 
 (** hardcoded info *)
 let listening_port = 61115
-;;
-
 let remote_host = "127.0.0.1"
-;;
-
 let remote_port = 61111
-;;
-
 
 (** general exceptions *)
 exception Error of string
-;;
-
 exception Unexpected_EOF
-;;
 
 (** type declaration *)
 type arguments = {
   r : Reader.t;
   w : Writer.t;
-};;
+}
 
 type local_init_req = {
   ver : int;
   nmethods : int;
   methods : int list;
-};;
+}
 
 type local_detail_req = {
   ver : int;
@@ -54,34 +45,22 @@ type local_detail_req = {
   atyp : int;
   dst_addr: string;
   dst_port: int;
-};;
-
+}
 
 type 'a buf = string
-;;
-
 type 'a args = arguments
-;;
 
 type local
-;;
-
 type remote
-;;
 
 type l_buf = local buf
-;;
-
 type r_buf = remote buf
-;;
 
 type l_args = local args
-;;
-
 type r_args = remote args
-;;
 
 module type STAGE_I = sig
+  
   val start_listen : 'a -> Reader.t -> Writer.t -> unit Deferred.t
 
   val init_and_nego :
@@ -90,7 +69,6 @@ module type STAGE_I = sig
     -> l_args
     -> unit Deferred.t
 end
-
 
 module type STAGE_II = sig
   
@@ -103,7 +81,6 @@ module type STAGE_II = sig
     -> l_args
     -> unit Deferred.t
  
-
   val data_transfer : 
     l_buf:l_buf
     -> r_buf:r_buf
@@ -113,14 +90,14 @@ module type STAGE_II = sig
 
 end
 
-
 module type LOCAL_TRANSFER = sig
+  
   include STAGE_I
   include STAGE_II
+
 end
 
 (** Some debugging functions *)
-
 let stdout_writer = Lazy.force Writer.stdout
 let stderr_writer = Lazy.force Writer.stderr
 
@@ -157,7 +134,6 @@ let read_and_review buf args =
     )
   )
 ;;
-
 
 module Parse_request = struct
 
@@ -224,27 +200,18 @@ module Parse_request = struct
 
 end
 
-
 module Local_transfer (Stage_II: STAGE_II) : LOCAL_TRANSFER = struct
   
   include Parse_request
 
   let remote_init = Stage_II.remote_init
-  ;;
-
   let data_transfer = Stage_II.data_transfer
-  ;;
-
+  
   let l_buf_size = Stage_II.l_buf_size
-  ;;
-
   let r_buf_size = Stage_II.r_buf_size
-  ;;
 
   let gen_l_buf () = 
     return (String.create l_buf_size)
-  ;;
-
 
   let init_and_nego buf n l_args =
     parse_init_req buf n >>= (fun init_req ->
@@ -291,7 +258,7 @@ module Local_transfer (Stage_II: STAGE_II) : LOCAL_TRANSFER = struct
     (Reader.read r buf) >>= (function
       | `Eof -> Writer.close w >>= (fun () -> raise Unexpected_EOF)
       | `Ok n -> begin
-           let l_args : l_args = { r = r; w = w;}
+           let l_args = { r = r; w = w;}
            in init_and_nego buf n l_args
          end
     ))
@@ -299,24 +266,16 @@ module Local_transfer (Stage_II: STAGE_II) : LOCAL_TRANSFER = struct
 
 end
 
-
-module AES_CBC : STAGE_II = struct
+module AES_256_CBC : STAGE_II = struct
   
   let l_buf_size = 4096
-  ;;
-
   let r_buf_size = 4200
-  ;;
+  let password = "nano15532"
 
   let header_len = 16
-  ;;
 
-  let gen_r_buf () : r_buf Deferred.t = 
+  let gen_r_buf () = 
     return (String.create r_buf_size)
-  ;;
-
-  let password = "nano15532"
-  ;;
 
   let encryptor, decryptor =
     let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
@@ -357,14 +316,12 @@ module AES_CBC : STAGE_II = struct
               handle_local buf l_args r_args)))
   ;;
 
-
   let data_transfer ~l_buf ~r_buf ~l_args ~r_args =
     (Deferred.both 
     (handle_remote r_buf l_args r_args)
     (handle_local l_buf l_args r_args))
     >>= fun ((), ()) -> return ()
   ;;
-
 
   let send_addr_info buf n ~l_args ~r_args = 
     encryptor ~ptext:(String.slice buf 3 n) >>= (fun enc_text ->
@@ -378,26 +335,21 @@ module AES_CBC : STAGE_II = struct
     )
   ;;
 
-
   let remote_init buf n l_args =
     Tcp.with_connection (Tcp.to_host_and_port remote_host remote_port)
     (fun _ r w ->
-      let r_args : r_args = {r = r; w = w;}
+      let r_args = {r = r; w = w;}
       in send_addr_info buf n ~l_args ~r_args)
   ;;
 
 end
-;;
-
 
 let server () =
-  let module Handler = Local_transfer(AES_CBC) in
+  let module Handler = Local_transfer(AES_256_CBC) in
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore Handler.start_listen
 ;;
 
 let () = ignore (server ())
-;;
 
 let () = never_returns (Scheduler.go ())
-;;

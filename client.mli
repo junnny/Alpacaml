@@ -22,20 +22,20 @@ exception Error of string
 
 exception Unexpected_EOF
 
-type local_init_req
+type arguments
+type 'a buf
+type 'a args
 
+type local_init_req
 type local_detail_req
 
 type local
-
 type remote
 
 type l_buf 
-
 type r_buf
 
 type l_args
-
 type r_args
 
 module type STAGE_I = sig
@@ -44,17 +44,17 @@ module type STAGE_I = sig
     Async_unix.Reader.t ->
     Async_unix.Writer.t -> unit Async_kernel.Deferred.t
   val init_and_nego :
-    local_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
 end
 
 module type STAGE_II = sig
-  val local_buf_size : int
-  val remote_buf_size : int
+  val l_buf_size : int
+  val r_buf_size : int
   val remote_init :
-    local_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
   val data_transfer :
-    l_buf:local_buf ->
-    r_buf:remote_buf ->
+    l_buf:l_buf ->
+    r_buf:r_buf ->
     l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
 end
 
@@ -64,14 +64,14 @@ module type LOCAL_TRANSFER = sig
     Async_unix.Reader.t ->
     Async_unix.Writer.t -> unit Async_kernel.Deferred.t
   val init_and_nego :
-    local_buf -> int -> l_args -> unit Async_kernel.Deferred.t
-  val local_buf_size : int
-  val remote_buf_size : int
+    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+  val l_buf_size : int
+  val r_buf_size : int
   val remote_init :
-    local_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
   val data_transfer :
-    l_buf:local_buf ->
-    r_buf:remote_buf ->
+    l_buf:l_buf ->
+    r_buf:r_buf ->
     l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
 end
 
@@ -101,7 +101,7 @@ end
 
 module Local_transfer : functor (Stage_II : STAGE_II) -> LOCAL_TRANSFER
 
-module AES_CBC : STAGE_II
+module AES_256_CBC : STAGE_II
 
 val server :
   unit ->

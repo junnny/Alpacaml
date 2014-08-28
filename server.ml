@@ -20,28 +20,21 @@ open Core_extended.Extended_string
 (** hardcoded info *)
 let listening_port = 61111
 
-
-
 (** a general exception *)
 exception Error of string
-;;
-
 exception Unexpected_EOF
-;;
-
 
 (** type declaration *)
 type arguments = {
   r : Reader.t;
   w : Writer.t;
-};;
-
+}
 
 type remote_req = {
   atyp : int;
   dst_host: string;
   dst_port: int;
-};;
+}
 
 type 'a buf = string
 type 'a args = arguments
@@ -54,9 +47,6 @@ type r_buf = remote buf
 
 type l_args = local args
 type r_args = remote args
-
-
-
 
 (** Some debugging function *)
 let stdout_writer = Lazy.force Writer.stdout
@@ -95,7 +85,6 @@ let read_and_review buf args =
   )
 ;;
 
-
 module type REMOTE_TRANSFER = sig
 
   val local_buf_size : int
@@ -117,7 +106,6 @@ module type REMOTE_TRANSFER = sig
     -> unit Deferred.t
 
 end
-
 
 module Parse_request = struct
   
@@ -172,12 +160,11 @@ module Parse_request = struct
   
 end
 
-module AES_CFB : REMOTE_TRANSFER = struct
+module AES_256_CBC : REMOTE_TRANSFER = struct
 
   include Parse_request
 
   let local_buf_size = 4200
-  
   let remote_buf_size = 4096
 
   let header_len = 16
@@ -196,7 +183,6 @@ module AES_CFB : REMOTE_TRANSFER = struct
     (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
   ;;
   
-  (**************************************************************)
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.read r_args.r buf >>= 
     (function
@@ -251,7 +237,7 @@ module AES_CFB : REMOTE_TRANSFER = struct
               Tcp.with_connection 
               (Tcp.to_host_and_port req.dst_host req.dst_port)
               (fun _ r w ->
-                let r_args : r_args = {r = r; w = w} in 
+                let r_args = {r = r; w = w} in 
                 gen_remote_buf () >>= (fun r_buf ->
                   data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args)
               )))
@@ -265,7 +251,7 @@ module AES_CFB : REMOTE_TRANSFER = struct
       | `Eof _ -> raise (Error "Local closed unexpectedly")
       | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
           (fun req_len -> 
-            let l_args : l_args = {r = r; w = w;}
+            let l_args = {r = r; w = w;}
             in init_and_nego buf (int_of_string req_len) l_args)
     ))
   ;;
@@ -273,7 +259,7 @@ module AES_CFB : REMOTE_TRANSFER = struct
 end
 
 let server () =
-  let module Handler = AES_CFB in
+  let module Handler = AES_256_CBC in
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore Handler.start_listen
 ;;

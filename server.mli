@@ -16,21 +16,22 @@
 val listening_port : int
 
 exception Error of string
-
 exception Unexpected_EOF
+
+
+type arguments
+type 'a buf
+type 'a args
 
 type remote_req
 
 type local
-
 type remote
 
 type l_buf
-
 type r_buf
 
 type l_args
-
 type r_args
 
 val stdout_writer : Async_unix.Writer.t
@@ -69,7 +70,7 @@ module Parse_request : sig
   val parse_init_req : string -> remote_req Async_kernel.Deferred.t
 end
 
-module AES_CFB : REMOTE_TRANSFER
+module AES_256_CBC : REMOTE_TRANSFER
 
 val server :
   unit ->
