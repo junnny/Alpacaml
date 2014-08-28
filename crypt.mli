@@ -55,12 +55,45 @@ module AES_Cipher : sig
 end
 
 (** Same AES cipher but with random generated IV every encryption *)
-module AES_Cipher_RandomIV : sig
+module AES_256_CBC_RandomIV : sig
 
-  val encryptor_r : key:string -> plain:string Deferred.t -> prng:Random.rng -> 
-                      string Deferred.t
+  val encryptor: key:string -> prng:Random.rng -> ptext:string ->
+                 string Deferred.t
 
-  val decryptor_r : key:string -> cipher:string Deferred.t -> string Deferred.t
+  val decryptor: key:string -> iv:string -> ctext:string -> string Deferred.t
 end
 
-(** TODO: add more encryption methods, like libsodium *)
+open Sodium
+
+module Libsodium : sig
+  val get_nonce : unit -> Box.nonce Deferred.t
+    
+  val gen_sk_pk : unit -> Box.keypair Deferred.t
+    
+  val encryptor : sk:secret Box.key -> pk':public Box.key -> ptext:string -> 
+                    nonce:Box.nonce -> string Deferred.t
+    
+  val decryptor : sk:secret Box.key -> pk':public Box.key -> ctext:string -> 
+                    nonce:Box.nonce -> string Deferred.t
+    
+  val sk_to_storage : sk:secret Box.key -> string Deferred.t
+    
+  val pk_to_storage : pk:public Box.key -> string Deferred.t
+    
+  val nonce_to_storage : nonce:Box.nonce -> string Deferred.t
+    
+  val storage_to_sk : storage:string -> secret Box.key Deferred.t
+    
+  val storage_to_pk : storage:string -> public Box.key Deferred.t
+    
+  val stoarge_to_nonce : storage:string -> Box.nonce Deferred.t
+    
+  val compute_channel_key : sk:secret Box.key -> pk':public Box.key -> 
+                              channel Box.key Deferred.t
+    
+  val fast_encryptor : ck:channel Box.key -> ptext:string -> 
+                         nonce:Box.nonce -> string Deferred.t
+    
+  val fast_decryptor : ck:channel Box.key -> ctext:string -> 
+                         nonce:Box.nonce -> string Deferred.t
+end

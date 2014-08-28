@@ -20,16 +20,18 @@ open Core_extended.Extended_string
 (** hardcoded info *)
 let listening_port = 61111
 
-let send_buf_size = 4096
-let recv_buf_size = 4200
 
-let header_len = 16
 
 (** a general exception *)
 exception Error of string
+;;
+
+exception Unexpected_EOF
+;;
+
 
 (** type declaration *)
-type args = {
+type arguments = {
   r : Reader.t;
   w : Writer.t;
 };;
@@ -41,10 +43,24 @@ type remote_req = {
   dst_port: int;
 };;
 
+type 'a buf = string
+type 'a args = arguments
+
+type local
+type remote
+
+type l_buf = local buf
+type r_buf = remote buf
+
+type l_args = local args
+type r_args = remote args
+
+
+
 
 (** Some debugging function *)
 let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer= Lazy.force Writer.stderr
+let stderr_writer = Lazy.force Writer.stderr
 
 let message s = 
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
@@ -80,158 +96,186 @@ let read_and_review buf args =
 ;;
 
 
-(** turn binary bit from string to int, helper function
-    pos should be in range
-    string -> int -> int Deferred.t *)
-let get_bin req pos = unpack_unsigned_8 ~buf:req ~pos
+module type REMOTE_TRANSFER = sig
 
-(** testing password, AES-256 encryptor and decryptor *)
-let password = "nano15532"
+  val local_buf_size : int
+  val remote_buf_size : int
 
-let encryptor, decryptor =
-  let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
-  (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
-;;
+  val start_listen : 'a -> Reader.t -> Writer.t -> unit Deferred.t
 
-(**************************************************************)
-let rec handle_remote ~buf ~local_args ~remote_args =
-  Reader.read remote_args.r buf >>= 
-  (function
-    | `Eof -> Writer.close local_args.w >>= (fun () -> 
-                Reader.close remote_args.r)
-    | `Ok n ->
-        encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
-          encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
-            Writer.write local_args.w enc_len;
-            Writer.write local_args.w enc_text;
-            handle_remote ~buf ~local_args ~remote_args))
-  )
-;;
+  val init_and_nego : 
+    l_buf
+    -> int
+    -> l_args
+    -> unit Deferred.t
+  
+  val data_transfer :
+    l_buf: l_buf
+    -> r_buf: r_buf
+    -> l_args: l_args
+    -> r_args: r_args
+    -> unit Deferred.t
 
-let rec handle_local ~buf ~local_args ~remote_args =
-  Reader.really_read local_args.r ~pos:0 ~len:header_len buf >>= 
-  (function
-    | `Eof _ -> return () (*raise (Error "Local closed unexpectedly\n");*)
-    | `Ok -> 
+end
+
+
+module Parse_request = struct
+  
+  let get_bin req pos = unpack_unsigned_8 ~buf:req ~pos
+
+  let parse_dst_host_and_port atyp buf = 
+    match () with
+    | () when atyp = 1 -> 
         begin
-        decryptor ~ctext:(String.slice buf 0 header_len) >>= (fun req_len ->
-          let req_len = int_of_string req_len in
-          Reader.really_read local_args.r ~pos:0 ~len:req_len buf >>= 
-          (function
-            | `Eof _ -> raise (Error "Local closed unexpectedly\n");
-            | `Ok -> 
-                decryptor 
-                ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
-                  Writer.write remote_args.w raw_req;
-                  handle_local ~buf ~local_args ~remote_args)
-          )) 
+          let host_buf = Bigbuffer.create 20 in
+          let rec build_host s e =
+            if s = e then Bigbuffer.contents host_buf else 
+              (get_bin buf s |> string_of_int |> Bigbuffer.add_string host_buf;
+               if s < (e - 1) then Bigbuffer.add_char host_buf '.';
+              build_host (s + 1) e)
+          in
+          let dst_host = build_host 1 5 in
+          let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:5
+          in (dst_host, dst_port)
         end
-  )
-;;
+    | () when atyp = 3 ->
+        begin 
+          let host_length = get_bin buf 1 in
+          let host_buf = Bigbuffer.create host_length in
+          let rec build_host s e =
+            if s = e then Bigbuffer.contents host_buf else
+              (get_bin buf s |> char_of_int |> Bigbuffer.add_char host_buf;
+              build_host (s + 1) e)
+          in 
+          let dst_host = build_host 2 (2 + host_length) in
+          let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:(2 + host_length) in
+          (dst_host, dst_port)
+        end
+    | _ -> raise (Error "IPV6 is not supported yet\n")
+  ;;
+  
+  let parse_dst_port req_len req =
+    unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
+  
+  let parse_init_req req =
+    Deferred.create (function r ->
+      let atyp = get_bin req 0 in
+      let dst_host, dst_port = parse_dst_host_and_port atyp req in
+      Ivar.fill r
+      {
+        atyp = atyp;
+        dst_host = dst_host;
+        dst_port = dst_port;
+      }
+    )
+  ;;
+  
+end
 
-(** need to use something similar to "select" *)
-let handle_stage_II buf_local local_args remote_args =
-  let buf_remote = String.create send_buf_size in
-  (Deferred.both 
-  (handle_remote ~buf:buf_remote ~local_args ~remote_args)
-  (handle_local ~buf:buf_local ~local_args ~remote_args))
-  >>= fun ((), ()) -> return ()
-;;
+module AES_CFB : REMOTE_TRANSFER = struct
 
+  include Parse_request
 
-let stage_II buf req local_args =
-  Tcp.with_connection
-  (Tcp.to_host_and_port req.dst_host req.dst_port)
-  (fun _ r w ->
-    let remote_args =
-    {
-      r = r;
-      w = w;
-    } in
-    handle_stage_II buf local_args remote_args
-  )
-;;
+  let local_buf_size = 4200
+  
+  let remote_buf_size = 4096
 
-(** STAGE I, 
-    decrypt request from local, 
-    parse request,
-    further request to STAGE II *)
+  let header_len = 16
 
-let parse_dst_host_and_port atyp buf = 
-  match () with
-  | () when atyp = 1 -> 
-      begin
-        let host_buf = Bigbuffer.create 20 in
-        let rec build_host s e =
-          if s = e then Bigbuffer.contents host_buf else 
-            (get_bin buf s |> string_of_int |> Bigbuffer.add_string host_buf;
-             if s < (e - 1) then Bigbuffer.add_char host_buf '.';
-            build_host (s + 1) e)
-        in
-        let dst_host = build_host 1 5 in
-        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:5
-        in (dst_host, dst_port)
-      end
-  | () when atyp = 3 ->
-      begin 
-        let host_length = get_bin buf 1 in
-        let host_buf = Bigbuffer.create host_length in
-        let rec build_host s e =
-          if s = e then Bigbuffer.contents host_buf else
-            (get_bin buf s |> char_of_int |> Bigbuffer.add_char host_buf;
-            build_host (s + 1) e)
-        in 
-        let dst_host = build_host 2 (2 + host_length) in
-        let dst_port = unpack_unsigned_16_big_endian ~buf ~pos:(2 + host_length) in
-        (dst_host, dst_port)
-      end
-  | _ -> raise (Error "IPV6 is not supported yet\n")
-;;
+  let gen_local_buf () = 
+    return (String.create local_buf_size)
 
-let parse_dst_port req_len req =
-  unpack_unsigned_16_big_endian ~buf:req ~pos:(req_len - 2)
+  let gen_remote_buf () = 
+    return (String.create remote_buf_size)
 
-let parse_stage_I req =
-  Deferred.create (function r ->
-    let atyp = get_bin req 0 in
-    let dst_host, dst_port = parse_dst_host_and_port atyp req in
-    Ivar.fill r
-    {
-      atyp = atyp;
-      dst_host = dst_host;
-      dst_port = dst_port;
-    }
-  )
-;;
+  (** testing password, AES-256 encryptor and decryptor *)
+  let password = "nano15532"
+  
+  let encryptor, decryptor =
+    let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
+    (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
+  ;;
+  
+  (**************************************************************)
+  let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
+    Reader.read r_args.r buf >>= 
+    (function
+      | `Eof -> Writer.close l_args.w >>= (fun () -> 
+                  Reader.close r_args.r)
+      | `Ok n ->
+          encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
+            encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
+              Writer.write l_args.w enc_len;
+              Writer.write l_args.w enc_text;
+              handle_remote buf l_args r_args))
+    )
+  ;;
+  
+  let rec handle_local (buf:l_buf) (l_args:l_args) (r_args:r_args) =
+    Reader.really_read l_args.r ~pos:0 ~len:header_len buf >>= 
+    (function
+      | `Eof _ -> return ()
+      | `Ok -> 
+          begin
+          decryptor ~ctext:(String.slice buf 0 header_len) >>= (fun req_len ->
+            let req_len = int_of_string req_len in
+            Reader.really_read l_args.r ~pos:0 ~len:req_len buf >>= 
+            (function
+              | `Eof _ -> raise (Error "Local closed unexpectedly\n");
+              | `Ok -> 
+                  decryptor 
+                  ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
+                    Writer.write r_args.w raw_req;
+                    handle_local buf l_args r_args)
+            )) 
+          end
+    )
+  ;;
+  
+  (** need to use something similar to "select" *)
+  let data_transfer ~l_buf ~r_buf ~l_args ~r_args =
+    (Deferred.both 
+    (handle_remote r_buf l_args r_args)
+    (handle_local l_buf l_args r_args))
+    >>= fun ((), ()) -> return ()
+  ;;
+  
+  
+  let init_and_nego buf req_len l_args =
+    Reader.really_read l_args.r ~pos:0 ~len:req_len buf >>=
+    (function
+      | `Eof _ -> raise Unexpected_EOF
+      | `Ok -> 
+          decryptor ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
+            parse_init_req raw_req >>= (fun req ->
+              Tcp.with_connection 
+              (Tcp.to_host_and_port req.dst_host req.dst_port)
+              (fun _ r w ->
+                let r_args : r_args = {r = r; w = w} in 
+                gen_remote_buf () >>= (fun r_buf ->
+                  data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args)
+              )))
+    )
+  ;;
+  
+  let start_listen _ r w =
+    gen_local_buf () >>= (fun buf ->
+    (Reader.really_read r ~pos:0 ~len:header_len buf) >>= 
+    (function
+      | `Eof _ -> raise (Error "Local closed unexpectedly")
+      | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
+          (fun req_len -> 
+            let l_args : l_args = {r = r; w = w;}
+            in init_and_nego buf (int_of_string req_len) l_args)
+    ))
+  ;;
 
-let stage_I buf req_len local_args =
-  Reader.really_read local_args.r ~pos:0 ~len:req_len buf >>=
-  (function
-    | `Eof _ -> raise (Error "Local closed unexpectedly")
-    | `Ok -> decryptor ~ctext:(String.slice buf 0 req_len) >>= (fun raw_req ->
-               parse_stage_I raw_req >>= (fun req ->
-                 stage_II buf req local_args))
-  )
-;;
-
-let start_listen _ r w =
-  let buf = String.create recv_buf_size in
-  (Reader.really_read r ~pos:0 ~len:header_len buf) >>= 
-  (function
-    | `Eof _ -> raise (Error "Local closed unexpectedly")
-    | `Ok -> decryptor ~ctext:(String.slice buf 0 header_len) >>=
-        (fun req_len -> 
-          let local_args =
-          {
-            r = r;
-            w = w;
-          } in stage_I buf (int_of_string req_len) local_args)
-  )
-;;
+end
 
 let server () =
+  let module Handler = AES_CFB in
   Tcp.Server.create (Tcp.on_port listening_port) 
-  ~on_handler_error:`Ignore start_listen
+  ~on_handler_error:`Ignore Handler.start_listen
 ;;
 
 let () = ignore (server ())

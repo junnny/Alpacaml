@@ -57,21 +57,60 @@ module AES_Cipher = struct
 end
 
 
+module AES_256_CBC_RandomIV = struct
 
-module AES_Cipher_RandomIV = struct
+  let encryptor ~key ~prng ~ptext =
+    return (Random.string prng 16) >>= (fun riv ->
+      return (Cipher.aes ~pad:Padding.length ~iv:riv key Cipher.Encrypt) >>=
+        (fun encbox -> return (transform_string encbox ptext) >>=
+          (fun ctext -> return (riv ^ ctext))))
 
-  let encryptor_r ~key ~plain ~prng =
-    let riv = Random.string prng 16 in
-    let encbox = 
-      return (Cipher.aes ~pad:Padding.length ~iv:riv key Cipher.Encrypt) in
-    Deferred.both encbox plain >>|
-    fun (encrypt, plaintext) -> (riv ^ (transform_string encrypt plaintext))
+  let decryptor ~key ~iv ~ctext =
+    return (Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt) >>=
+    (fun decbox -> return (transform_string decbox ctext))
 
-  let decryptor_r ~key ~cipher =
-    let decbox = (cipher >>| (fun ctext -> String.slice ctext 0 16)) >>|
-    (fun iv -> Cipher.aes ~pad:Padding.length ~iv key Cipher.Decrypt) in
-    let ctext = (cipher >>| 
-      fun ctext -> String.slice ctext 16 (String.length ctext)) in
-    Deferred.both decbox ctext >>|
-    (fun (decrypt, ciphertext) -> transform_string decrypt ciphertext)
 end
+
+open Sodium
+
+module Libsodium = struct
+  
+  let get_nonce () = return (Box.random_nonce ())
+
+  let gen_sk_pk () = return (Box.random_keypair ())
+
+  let encryptor ~sk ~pk' ~ptext ~nonce = 
+    return (Box.Bytes.box sk pk' ptext nonce)
+
+  let decryptor ~sk ~pk' ~ctext ~nonce =
+    return (Box.Bytes.box sk pk' ctext nonce)
+  
+  let sk_to_storage ~sk = 
+    return (Box.Bytes.of_secret_key sk)
+
+  let pk_to_storage ~pk = 
+    return (Box.Bytes.of_public_key pk)
+  
+  let nonce_to_storage ~nonce =
+    return (Box.Bytes.of_nonce nonce)
+
+  let storage_to_sk ~storage =
+    return (Box.Bytes.to_secret_key storage)
+
+  let storage_to_pk ~storage =
+    return (Box.Bytes.to_public_key storage)
+
+  let stoarge_to_nonce ~storage =
+    return (Box.Bytes.to_nonce storage)
+
+  let compute_channel_key ~sk ~pk' = 
+    return (Box.precompute sk pk')
+
+  let fast_encryptor ~ck ~ptext ~nonce =
+    return (Box.Bytes.fast_box ck ptext nonce)
+
+  let fast_decryptor ~ck ~ctext ~nonce =
+    return (Box.Bytes.fast_box_open ck ctext nonce)
+end
+
+
