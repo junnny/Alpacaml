@@ -26,9 +26,9 @@ written in OCaml.
 
 **A**: Because f*ck GFW. That's why.
 
-**Q**: Why not use C, Python, or Node.js?
+**Q**: Why not use Node.js?
 
-**A**: F*ck C, f*ck Python and f*ck Node.js particularly. Alpaca also shows its indifference to Node.js:
+**A**: Because f*ck Node.js. Alpaca also shows its indifference to Node.js:
 
 ![pic](https://lh6.googleusercontent.com/-XlW6F95vMBU/U_w8rjY7trI/AAAAAAAABOw/WPfHuVuxQxQ/w852-h764/alpaca_loop_nodejs.gif)
 
