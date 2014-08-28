@@ -10,7 +10,7 @@ written in OCaml.
 * Jane Street's Core and Async library                                             
 * Xavier Leroy's Cryptokit                                                         
 * David Sheet's ocaml-libsodium                                                    
-* 9gag.com, without whom I would have finished months earlier
+* The *sine qua non* 9gag.com, without which I would have finished months earlier
 
 ###TO-DO
 * Support for libsodium, AES-256-CFB, AES-256-OFB and ARCFour encryptions
