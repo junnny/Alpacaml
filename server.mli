@@ -34,9 +34,9 @@ type r_buf
 type l_args
 type r_args
 
-val stdout_writer : Async_unix.Writer.t
+val stdout_writer : unit -> Async_unix.Writer.t
 
-val stderr_writer : Async_unix.Writer.t
+val stderr_writer : unit -> Async_unix.Writer.t
 
 val message : string -> unit
 

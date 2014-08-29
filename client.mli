@@ -75,9 +75,9 @@ module type LOCAL_TRANSFER = sig
     l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
 end
 
-val stdout_writer : Async_unix.Writer.t
+val stdout_writer : unit -> Async_unix.Writer.t
 
-val stderr_writer : Async_unix.Writer.t
+val stderr_writer : unit -> Async_unix.Writer.t
 
 val message : string -> unit
 

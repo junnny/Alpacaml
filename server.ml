@@ -49,20 +49,20 @@ type l_args = local args
 type r_args = remote args
 
 (** Some debugging function *)
-let stdout_writer = Lazy.force Writer.stdout
-let stderr_writer = Lazy.force Writer.stderr
+let stdout_writer () = Lazy.force Writer.stdout
+let stderr_writer () = Lazy.force Writer.stderr
 
 let message s = 
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stdout_writer
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write (stdout_writer ())
 ;;
 
 let warn s = 
   (Printf.sprintf "REMOTE ==> [ %s] : %s\n" 
-   (Time.to_filename_string (Time.now ())) s) |> Writer.write stderr_writer
+   (Time.to_filename_string (Time.now ())) s) |> Writer.write (stderr_writer ())
 ;;
 
-let one_byte_message s = Writer.write stdout_writer s
+let one_byte_message s = Writer.write (stdout_writer ()) s
 
 let view_request buf n = 
   let poses = List.range 0 n in
@@ -264,6 +264,6 @@ let server () =
   ~on_handler_error:`Ignore Handler.start_listen
 ;;
 
-let () = ignore (server ())
-
-let () = never_returns (Scheduler.go ())
+let () = never_returns 
+  (Scheduler.go_main ~max_num_open_file_descrs:32768 ~max_num_threads:4096 
+    ~main:(fun () -> ignore (server ())) ())
