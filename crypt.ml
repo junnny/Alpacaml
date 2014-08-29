@@ -57,7 +57,7 @@ module AES_Cipher = struct
 end
 
 
-module AES_256_CBC_RandomIV = struct
+module AES_256_CBC_Random_IV = struct
 
   let encryptor ~key ~prng ~ptext =
     return (Random.string prng 16) >>= (fun riv ->

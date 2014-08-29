@@ -55,7 +55,7 @@ module AES_Cipher : sig
 end
 
 (** Same AES cipher but with random generated IV every encryption *)
-module AES_256_CBC_RandomIV : sig
+module AES_256_CBC_Random_IV : sig
 
   val encryptor: key:string -> prng:Random.rng -> ptext:string ->
                  string Deferred.t

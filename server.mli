@@ -70,7 +70,7 @@ module Parse_request : sig
   val parse_init_req : string -> remote_req Async_kernel.Deferred.t
 end
 
-module AES_256_CBC : REMOTE_TRANSFER
+module AES_256_CBC_Random_IV : REMOTE_TRANSFER
 
 val server :
   unit ->

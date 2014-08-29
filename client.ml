@@ -266,37 +266,52 @@ module Local_transfer (Stage_II: STAGE_II) : LOCAL_TRANSFER = struct
 
 end
 
-module AES_256_CBC : STAGE_II = struct
+module AES_256_CBC_Random_IV : STAGE_II = struct
   
   let l_buf_size = 4096
   let r_buf_size = 4200
   let password = "nano15532"
 
-  let header_len = 16
+  let header_len = 32
 
   let gen_r_buf () = 
     return (String.create r_buf_size)
 
-  let encryptor, decryptor =
-    let key, iv = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16 in
-    (Crypt.AES_Cipher.encryptor ~key ~iv, Crypt.AES_Cipher.decryptor ~key ~iv)
-  ;;
+  let (key, _) = Crypt.evpBytesToKey ~pwd:password ~key_len:32 ~iv_len:16
+
+  let prng = Crypt.prng ()
+
+  let encryptor = 
+    Crypt.AES_256_CBC_Random_IV.encryptor ~key ~prng
+
+  let decryptor = 
+    Crypt.AES_256_CBC_Random_IV.decryptor ~key
+
+  let close_connection l_args r_args =
+    Writer.close l_args.w >>= (fun () -> Reader.close r_args.r)
+
 
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.really_read r_args.r ~pos:0 ~len:header_len buf >>=
     (function 
-      | `Eof _ -> Writer.close l_args.w >>= (fun () ->
-                    Reader.close r_args.r)
+      | `Eof _ -> close_connection l_args r_args
       | `Ok ->
           begin
-          decryptor ~ctext:(String.slice buf 0 header_len) >>= (fun req_len ->
+          decryptor 
+          ~iv:(String.slice buf 0 16)
+          ~ctext:(String.slice buf 16 header_len) 
+          >>= 
+          (fun req_len ->
             let req_len = int_of_string req_len in
             Reader.really_read r_args.r ~pos:0 ~len:req_len buf >>=
             (function
-              | `Eof _ -> raise (Error "Local closed unexpectedly\n");
+              | `Eof _ -> close_connection l_args r_args
               | `Ok ->
                   decryptor 
-                  ~ctext:(String.slice buf 0 req_len) >>= (fun raw_data ->
+                  ~iv:(String.slice buf 0 16)
+                  ~ctext:(String.slice buf 16 req_len) 
+                  >>= 
+                  (fun raw_data ->
                     Writer.write l_args.w raw_data;
                     handle_remote buf l_args r_args)))
           end
@@ -337,6 +352,7 @@ module AES_256_CBC : STAGE_II = struct
 
   let remote_init buf n l_args =
     Tcp.with_connection (Tcp.to_host_and_port remote_host remote_port)
+    ~timeout:(sec 0.3)
     (fun _ r w ->
       let r_args = {r = r; w = w;}
       in send_addr_info buf n ~l_args ~r_args)
@@ -345,7 +361,7 @@ module AES_256_CBC : STAGE_II = struct
 end
 
 let server () =
-  let module Handler = Local_transfer(AES_256_CBC) in
+  let module Handler = Local_transfer(AES_256_CBC_Random_IV) in
   Tcp.Server.create (Tcp.on_port listening_port) 
   ~on_handler_error:`Ignore Handler.start_listen
 ;;

@@ -101,7 +101,7 @@ end
 
 module Local_transfer : functor (Stage_II : STAGE_II) -> LOCAL_TRANSFER
 
-module AES_256_CBC : STAGE_II
+module AES_256_CBC_Random_IV : STAGE_II
 
 val server :
   unit ->
