@@ -15,7 +15,6 @@
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
-open Core_extended.Extended_string
 
 (** hardcoded info *)
 let listening_port = 61111
@@ -103,6 +102,7 @@ module type REMOTE_TRANSFER = sig
     -> r_buf: r_buf
     -> l_args: l_args
     -> r_args: r_args
+    -> (string * int)
     -> unit Deferred.t
 
 end
@@ -190,7 +190,7 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.read r_args.r buf >>= 
     (function
-      | `Eof -> message "handle_remote closed"; return ()
+      | `Eof -> Writer.close l_args.w
       | `Ok n ->
           encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
             encryptor ~ptext:(string_of_int (String.length enc_text)) >>= (fun enc_len ->
@@ -203,7 +203,10 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
   let rec handle_local (buf:l_buf) (l_args:l_args) (r_args:r_args) =
     Reader.really_read l_args.r ~pos:0 ~len:header_len buf >>= 
     (function
-      | `Eof _ -> message "handle_local closed"; return ()
+      (** If we receive EOF, we know local has received all the data it needs.
+          We then need to tell remote server that connection should be 
+          disconnected *)
+      | `Eof _ -> Reader.close r_args.r
       | `Ok -> 
           begin
           decryptor 
@@ -214,7 +217,7 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
             let req_len = int_of_string req_len in
             Reader.really_read l_args.r ~pos:0 ~len:req_len buf >>= 
             (function
-              | `Eof _ -> raise (Error "Local closed unexpectedly\n");
+              | `Eof _ -> Reader.close r_args.r
               | `Ok -> 
                   decryptor
                   ~iv:(String.slice buf 0 16)
@@ -227,11 +230,13 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
   ;;
   
   (** need to use something similar to "select" *)
-  let data_transfer ~l_buf ~r_buf ~l_args ~r_args =
+  let data_transfer ~l_buf ~r_buf ~l_args ~r_args (host, port) =
     (Deferred.both 
     (handle_remote r_buf l_args r_args)
     (handle_local l_buf l_args r_args))
-    >>= fun ((), ()) -> return ()
+    >>= fun ((), ()) -> 
+      message (Printf.sprintf "Connection [%s: %d] is going to close" host port); 
+      return ()
   ;;
   
   
@@ -251,7 +256,7 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
               (fun _ r w ->
                 let r_args = {r = r; w = w} in 
                 gen_remote_buf () >>= (fun r_buf ->
-                  data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args)
+                  data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args (req.dst_host, req.dst_port))
               )))
     )
   ;;
