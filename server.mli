@@ -60,7 +60,7 @@ module type REMOTE_TRANSFER = sig
   val data_transfer :
     l_buf:l_buf ->
     r_buf:r_buf ->
-    l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
+    l_args:l_args -> r_args:r_args -> (string * int) -> unit Async_kernel.Deferred.t
 end
 
 module Parse_request : sig

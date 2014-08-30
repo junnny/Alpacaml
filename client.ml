@@ -15,11 +15,10 @@
 open Core.Std
 open Async.Std
 open Core_kernel.Binary_packing
-open Core_extended.Extended_string
 
 (** hardcoded info *)
 let listening_port = 61115
-let remote_host = "106.185.27.144"
+let remote_host = "127.0.0.1"
 let remote_port = 61111
 
 (** general exceptions *)
@@ -79,6 +78,7 @@ module type STAGE_II = sig
     l_buf
     -> int
     -> l_args
+    -> (string * int)
     -> unit Deferred.t
  
   val data_transfer : 
@@ -86,6 +86,7 @@ module type STAGE_II = sig
     -> r_buf:r_buf
     -> l_args:l_args
     -> r_args:r_args
+    -> (string * int)
     -> unit Deferred.t
 
 end
@@ -240,7 +241,7 @@ module Local_transfer (Stage_II: STAGE_II) : LOCAL_TRANSFER = struct
                    in 
                    message log_msg;
                    Writer.write l_args.w reply; 
-                   remote_init buf n l_args
+                   (remote_init buf n l_args (req.dst_addr, req.dst_port))
                  end
               | _ -> 
                  let exp_msg = 
@@ -290,7 +291,7 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.really_read r_args.r ~pos:0 ~len:header_len buf >>=
     (function 
-      | `Eof _ -> message "handle_remote closed"; return ()
+      | `Eof _ -> Writer.close l_args.w
       | `Ok ->
           begin
           decryptor 
@@ -301,7 +302,7 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
             let req_len = int_of_string req_len in
             Reader.really_read r_args.r ~pos:0 ~len:req_len buf >>=
             (function
-              | `Eof _ -> close_connection l_args r_args
+              | `Eof _ -> Writer.close l_args.w
               | `Ok ->
                   decryptor 
                   ~iv:(String.slice buf 0 16)
@@ -317,7 +318,9 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
   let rec handle_local (buf:l_buf) (l_args:l_args) (r_args:r_args) =
     Reader.read l_args.r buf >>= 
     (function
-      | `Eof -> message "handle_local closed"; return ()
+      (** Local's request has been fulfilled, all data trasferred 
+          We then need to close remote connection *)
+      | `Eof -> Reader.close r_args.r
       | `Ok n ->
           encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
             encryptor ~ptext:(string_of_int (String.length enc_text)) >>= 
@@ -327,31 +330,33 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
               handle_local buf l_args r_args)))
   ;;
 
-  let data_transfer ~l_buf ~r_buf ~l_args ~r_args =
+  let data_transfer ~l_buf ~r_buf ~l_args ~r_args (host, port) =
     (Deferred.both 
     (handle_remote r_buf l_args r_args)
     (handle_local l_buf l_args r_args))
-    >>= fun ((), ()) -> message "Connection is going to close"; return ()
+    >>= fun ((), ()) ->
+     message (Printf.sprintf "Connection [%s: %d] is going to close" host port); 
+     return ()
   ;;
 
-  let send_addr_info buf n ~l_args ~r_args = 
+  let send_addr_info buf n ~l_args ~r_args (h, p) = 
     encryptor ~ptext:(String.slice buf 3 n) >>= (fun enc_text ->
       encryptor ~ptext:(string_of_int (String.length enc_text)) >>= 
       (fun enc_len ->
         Writer.write r_args.w enc_len;
         Writer.write r_args.w enc_text;
         gen_r_buf () >>= (fun r_buf ->
-          data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args)
+          data_transfer ~l_buf:buf ~r_buf ~l_args ~r_args (h, p))
       )
     )
   ;;
 
-  let remote_init buf n l_args =
+  let remote_init buf n l_args (h, p) =
     Tcp.with_connection (Tcp.to_host_and_port remote_host remote_port)
     ~timeout:(sec 0.3)
     (fun _ r w ->
       let r_args = {r = r; w = w;}
-      in send_addr_info buf n ~l_args ~r_args)
+      in send_addr_info buf n ~l_args ~r_args (h, p))
   ;;
 
 end

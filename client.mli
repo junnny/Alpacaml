@@ -51,11 +51,11 @@ module type STAGE_II = sig
   val l_buf_size : int
   val r_buf_size : int
   val remote_init :
-    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+    l_buf -> int -> l_args -> (string * int) -> unit Async_kernel.Deferred.t
   val data_transfer :
     l_buf:l_buf ->
     r_buf:r_buf ->
-    l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
+    l_args:l_args -> r_args:r_args -> (string * int) -> unit Async_kernel.Deferred.t
 end
 
 module type LOCAL_TRANSFER = sig
@@ -68,11 +68,13 @@ module type LOCAL_TRANSFER = sig
   val l_buf_size : int
   val r_buf_size : int
   val remote_init :
-    l_buf -> int -> l_args -> unit Async_kernel.Deferred.t
+    l_buf -> int -> l_args -> 
+    (string * int) -> unit Async_kernel.Deferred.t
   val data_transfer :
     l_buf:l_buf ->
     r_buf:r_buf ->
-    l_args:l_args -> r_args:r_args -> unit Async_kernel.Deferred.t
+    l_args:l_args -> r_args:r_args 
+    -> (string * int) -> unit Async_kernel.Deferred.t
 end
 
 val stdout_writer : unit -> Async_unix.Writer.t
