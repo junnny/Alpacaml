@@ -19,7 +19,7 @@ open Core_extended.Extended_string
 
 (** hardcoded info *)
 let listening_port = 61115
-let remote_host = "127.0.0.1"
+let remote_host = "106.185.27.144"
 let remote_port = 61111
 
 (** general exceptions *)
@@ -287,13 +287,10 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
   let decryptor = 
     Crypt.AES_256_CBC_Random_IV.decryptor ~key
 
-  let close_connection l_args r_args = return ()
-
-
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.really_read r_args.r ~pos:0 ~len:header_len buf >>=
     (function 
-      | `Eof _ -> close_connection l_args r_args
+      | `Eof _ -> message "handle_remote closed"; return ()
       | `Ok ->
           begin
           decryptor 
@@ -320,7 +317,7 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
   let rec handle_local (buf:l_buf) (l_args:l_args) (r_args:r_args) =
     Reader.read l_args.r buf >>= 
     (function
-      | `Eof -> return ()
+      | `Eof -> message "handle_local closed"; return ()
       | `Ok n ->
           encryptor ~ptext:(String.slice buf 0 n) >>= (fun enc_text ->
             encryptor ~ptext:(string_of_int (String.length enc_text)) >>= 
@@ -334,7 +331,7 @@ module AES_256_CBC_Random_IV : STAGE_II = struct
     (Deferred.both 
     (handle_remote r_buf l_args r_args)
     (handle_local l_buf l_args r_args))
-    >>= fun ((), ()) -> return ()
+    >>= fun ((), ()) -> message "Connection is going to close"; return ()
   ;;
 
   let send_addr_info buf n ~l_args ~r_args = 
