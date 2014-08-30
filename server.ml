@@ -187,10 +187,8 @@ module AES_256_CBC_Random_IV : REMOTE_TRANSFER = struct
   let decryptor = 
     Crypt.AES_256_CBC_Random_IV.decryptor ~key
 
-  let close_connection l_args r_args =
-    Writer.close l_args.w >>= (fun () -> Reader.close r_args.r)
-
-  
+  let close_connection l_args r_args = return ()
+ 
   let rec handle_remote (buf:r_buf) (l_args:l_args) (r_args:r_args) =
     Reader.read r_args.r buf >>= 
     (function
