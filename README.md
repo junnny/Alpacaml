@@ -4,7 +4,15 @@ Alpacaml is a type-safe, Monadic, fully asynchronous and encrypted SOCKS5 proxy
 written in OCaml.
 
 ###Build
-    corebuild -pkg async,core_extended,cryptokit client.native server.native
+Alpacaml consists of two parts: client and server.
+
+The following command will build both parts:
+
+    make all
+
+Note: One may need to set correct dynamic link path for libsodium on Ubuntu before running the program:
+
+    export LD_LIBRARY_PATH=/usr/local/lib
 
 ###Credit to                                                                       
 * Jane Street's Core and Async library                                             
@@ -14,7 +22,6 @@ written in OCaml.
 
 ###TO-DO
 * Support for libsodium, AES-256-CFB, AES-256-OFB and ARCFour encryptions
-* Better encryption and decryption modules, more integrated with Async
 * UDP relay
 
 ###FAQ
